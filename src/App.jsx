@@ -19,35 +19,27 @@ const PDFPage = ({
   onTokensParsed, 
   activeTokenId, 
   registerPageRef,
-  notifyPageVisible // New prop to sync scroll state
+  notifyPageVisible 
 }) => {
   const [isVisible, setIsVisible] = useState(false);
   const [isRendered, setIsRendered] = useState(false);
   const [pageDimensions, setPageDimensions] = useState(null); 
-   
+  const [hoveredTokenId, setHoveredTokenId] = useState(null); // New Hover State
+    
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const textLayerRef = useRef(null);
   const pageTokensRef = useRef([]);
   const spanMapRef = useRef(new Map());
 
-  // --- Scroll Visibility Observer (Sync Page -> Input) ---
+  // --- Scroll Visibility Observer ---
   useEffect(() => {
     const observer = new IntersectionObserver(
       ([entry]) => {
-        // Update visibility for rendering
-        if (entry.isIntersecting) {
-            setIsVisible(true);
-        }
-        // Notify parent if this page is the primary one in view
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
-            notifyPageVisible(pageNum);
-        }
+        if (entry.isIntersecting) setIsVisible(true);
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.5) notifyPageVisible(pageNum);
       },
-      { 
-          rootMargin: '200px', // Pre-load margin
-          threshold: 0.5       // Trigger when 50% of page is visible
-      } 
+      { rootMargin: '200px', threshold: 0.5 } 
     );
     if (containerRef.current) observer.observe(containerRef.current);
     return () => observer.disconnect();
@@ -67,9 +59,7 @@ const PDFPage = ({
 
         setPageDimensions({ width: viewport.width, height: viewport.height });
 
-        if (containerRef.current) {
-            containerRef.current.style.setProperty('--scale-factor', scale);
-        }
+        if (containerRef.current) containerRef.current.style.setProperty('--scale-factor', scale);
 
         if (canvasRef.current) {
             const ctx = canvasRef.current.getContext('2d');
@@ -77,7 +67,6 @@ const PDFPage = ({
             canvasRef.current.height = renderViewport.height;
             canvasRef.current.style.width = `${viewport.width}px`;
             canvasRef.current.style.height = `${viewport.height}px`;
-
             await page.render({ canvasContext: ctx, viewport: renderViewport }).promise;
         }
 
@@ -101,11 +90,9 @@ const PDFPage = ({
             spans.forEach(span => {
                 const text = span.textContent;
                 if (!text.trim()) return;
-
                 const regex = /\S+/g;
                 let match;
                 const spanTokens = [];
-
                 while ((match = regex.exec(text)) !== null) {
                     const token = {
                         id: `p${pageNum}_t${localIdCounter++}`,
@@ -132,7 +119,8 @@ const PDFPage = ({
     render();
   }, [isVisible, pdfDoc, pageNum, scale, isRendered]);
 
-  const handlePageClick = (e) => {
+  // --- Shared Logic for Click & Hover ---
+  const getTokenFromEvent = (e) => {
     let range;
     if (document.caretRangeFromPoint) range = document.caretRangeFromPoint(e.clientX, e.clientY);
     else if (document.caretPositionFromPoint) {
@@ -142,31 +130,44 @@ const PDFPage = ({
       range.setEnd(pos.offsetNode, pos.offset);
     }
     
-    if (!range || range.startContainer.nodeType !== Node.TEXT_NODE) return;
+    if (!range || range.startContainer.nodeType !== Node.TEXT_NODE) return null;
 
     const targetSpan = range.startContainer.parentElement;
-    const clickOffset = range.startOffset;
+    const offset = range.startOffset;
     const tokensInSpan = spanMapRef.current.get(targetSpan);
 
     if (tokensInSpan) {
-        const clickedToken = tokensInSpan.find(t => clickOffset >= t.startOffset && clickOffset <= t.endOffset);
-        if (clickedToken) {
-            onTokensParsed(pageTokensRef.current, clickedToken.id);
-        }
+        return tokensInSpan.find(t => offset >= t.startOffset && offset <= t.endOffset);
+    }
+    return null;
+  };
+
+  const handlePageClick = (e) => {
+    const clickedToken = getTokenFromEvent(e);
+    if (clickedToken) {
+        onTokensParsed(pageTokensRef.current, clickedToken.id);
     }
   };
 
-  const highlightStyle = useMemo(() => {
-    if (!activeTokenId || !pageTokensRef.current.length || !containerRef.current) return null;
-    
-    const activeToken = pageTokensRef.current.find(t => t.id === activeTokenId);
-    if (!activeToken) return null;
+  const handleMouseMove = (e) => {
+    const hoveredToken = getTokenFromEvent(e);
+    if (hoveredToken) {
+        if (hoveredToken.id !== hoveredTokenId) setHoveredTokenId(hoveredToken.id);
+    } else {
+        if (hoveredTokenId !== null) setHoveredTokenId(null);
+    }
+  };
+
+  // --- Reusable Highlight Calculation ---
+  const getHighlightStyle = useCallback((tokenId) => {
+    if (!tokenId || !pageTokensRef.current.length || !containerRef.current) return null;
+    const token = pageTokensRef.current.find(t => t.id === tokenId);
+    if (!token) return null;
 
     try {
         const range = document.createRange();
-        range.setStart(activeToken.spanElement.firstChild, activeToken.startOffset);
-        range.setEnd(activeToken.spanElement.firstChild, activeToken.endOffset);
-        
+        range.setStart(token.spanElement.firstChild, token.startOffset);
+        range.setEnd(token.spanElement.firstChild, token.endOffset);
         const rect = range.getBoundingClientRect();
         const containerRect = containerRef.current.getBoundingClientRect();
 
@@ -177,7 +178,10 @@ const PDFPage = ({
             height: rect.height
         };
     } catch (e) { return null; }
-  }, [activeTokenId]);
+  }, []);
+
+  const activeStyle = useMemo(() => getHighlightStyle(activeTokenId), [activeTokenId, getHighlightStyle]);
+  const hoverStyle = useMemo(() => getHighlightStyle(hoveredTokenId), [hoveredTokenId, getHighlightStyle]);
 
   return (
     <div 
@@ -195,16 +199,19 @@ const PDFPage = ({
       {isVisible && (
         <>
             <canvas ref={canvasRef} style={{ display: 'block' }} />
-            <div ref={textLayerRef} className="textLayer" onClick={handlePageClick} />
-            {highlightStyle && (
-                 <div className="highlight-box" style={{ ...highlightStyle }} />
-            )}
+            <div 
+                ref={textLayerRef} 
+                className="textLayer" 
+                onClick={handlePageClick}
+                onMouseMove={handleMouseMove}
+                onMouseLeave={() => setHoveredTokenId(null)}
+            />
+            {activeStyle && <div className="highlight-box" style={activeStyle} />}
+            {hoverStyle && <div className="hover-box" style={hoverStyle} />}
         </>
       )}
       {!isVisible && (
-          <div className="loading-placeholder">
-              <span>Page {pageNum}</span>
-          </div>
+          <div className="loading-placeholder"><span>Page {pageNum}</span></div>
       )}
     </div>
   );
@@ -220,7 +227,7 @@ const App = () => {
   const [numPages, setNumPages] = useState(0);
   const [activePage, setActivePage] = useState(1);
   const [jumpInput, setJumpInput] = useState("1");
-  const [isInputFocused, setIsInputFocused] = useState(false); // To prevent scroll overwriting typing
+  const [isInputFocused, setIsInputFocused] = useState(false);
 
   // TTS State
   const [voices, setVoices] = useState([]);
@@ -234,18 +241,13 @@ const App = () => {
   const audioMapRef = useRef([]); 
   const isSwitchingRef = useRef(false);
   const synth = window.speechSynthesis;
-  
   const pageRefs = useRef({}); 
 
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { rateRef.current = rate; }, [rate]);
 
-  // Sync Input box with Scroll
   useEffect(() => {
-    // Only update input from scroll if user isn't currently typing
-    if (!isInputFocused) {
-        setJumpInput(String(activePage));
-    }
+    if (!isInputFocused) setJumpInput(String(activePage));
   }, [activePage, isInputFocused]);
 
   useEffect(() => {
@@ -280,21 +282,16 @@ const App = () => {
     synth.cancel();
   };
 
-  const registerPageRef = (num, el) => {
-      pageRefs.current[num] = el;
-  };
+  const registerPageRef = (num, el) => { pageRefs.current[num] = el; };
 
-  const notifyPageVisible = useCallback((pageNum) => {
-      setActivePage(pageNum);
-  }, []);
+  const notifyPageVisible = useCallback((pageNum) => { setActivePage(pageNum); }, []);
 
-  // Handle "Jump to Page" on Enter
   const handleJumpKey = (e) => {
       if (e.key === 'Enter') {
           const page = parseInt(jumpInput);
           if (page >= 1 && page <= numPages && pageRefs.current[page]) {
               pageRefs.current[page].scrollIntoView({ behavior: 'smooth', block: 'start' });
-              e.target.blur(); // Remove focus after jump
+              e.target.blur(); 
           }
       }
   };
@@ -381,8 +378,6 @@ const App = () => {
         <div className="scroll-viewport">
             {!pdf ? (
                 <div className="empty-placeholder">
-                    <h3>PDF Audio Reader</h3>
-                    <p>Continuous Scroll & Lazy Loading Enabled</p>
                     <label className="upload-btn main-upload">
                         <Icons.Upload /> Open PDF File
                         <input type="file" accept="application/pdf" onChange={onFileChange} style={{display:'none'}} />
@@ -413,7 +408,6 @@ const App = () => {
                         {isPlaying ? <Icons.Pause /> : <Icons.Play />}
                     </button>
                     
-                    {/* Simplified Jump Control */}
                     <div className="jump-group">
                         <span className="label">Pg</span>
                         <input 
@@ -458,15 +452,19 @@ const App = () => {
         
         .main-content { flex: 1; display: flex; flex-direction: column; position: relative; background: #202023; }
         
-        /* Continuous Scroll Viewport */
         .scroll-viewport { flex: 1; overflow-y: auto; display: flex; justify-content: center; padding: 40px 0 120px 0; scroll-behavior: smooth; }
         .pdf-stream { display: flex; flex-direction: column; align-items: center; gap: 20px; width: 100%; }
         
-        .pdf-page-container { transition: box-shadow 0.2s;position: relative;}
+        .pdf-page-container { transition: box-shadow 0.2s; position: relative; }
         canvas { display: block; }
+        
         .textLayer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; opacity: 1; line-height: 1.0; transform-origin: 0 0; z-index: 2; }
         .textLayer span { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+        
         .highlight-box { position: absolute; background-color: rgba(99, 102, 241, 0.3); border: 2px solid #6366f1; border-radius: 2px; pointer-events: none; z-index: 10; mix-blend-mode: multiply; transition: all 0.05s linear; }
+        
+        /* NEW HOVER STYLE */
+        .hover-box { position: absolute; background-color: rgba(99, 102, 241, 0.2); border-radius: 2px; pointer-events: none; z-index: 5; mix-blend-mode: multiply; }
         
         .loading-placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #27272a; color: #52525b; border: 1px dashed #3f3f46; }
 
@@ -477,7 +475,6 @@ const App = () => {
         .upload-btn:hover { background: #3f3f46; border-color: #6366f1; }
         .upload-btn.main-upload { background: #6366f1; color: white; border: none; padding: 12px 24px; font-size: 16px; }
 
-        /* Player Bar */
         .player-bar { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); width: 700px; background: rgba(39, 39, 42, 0.95); border: 1px solid #3f3f46; border-radius: 16px; padding: 12px 24px; display: flex; align-items: center; gap: 20px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); z-index: 100; backdrop-filter: blur(10px); }
         .player-controls { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
         .play-fab { width: 40px; height: 40px; border-radius: 50%; background: #fff; color: #000; border: none; cursor: pointer; display: grid; place-items: center; }
