@@ -5,25 +5,15 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs
 
 // --- Icon Components ---
 const Icons = {
-  Upload: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>,
-  Prev: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>,
-  Next: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg>,
+  Upload: () => <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>,
   Play: () => <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>,
   Pause: () => <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>,
-  File: () => <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>,
-  Edit: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
-  EyeOff: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M1 1l22 22"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/></svg>,
-  Check: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>,
-  Close: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
   Voice: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
 };
 
 const App = () => {
   const [pdf, setPdf] = useState(null);
-  const [fileName, setFileName] = useState("");
   const [pageNum, setPageNum] = useState(1);
-  const [numPages, setNumPages] = useState(0);
-   
   const [highlight, setHighlight] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [rate, setRate] = useState(1.0);
@@ -32,20 +22,15 @@ const App = () => {
   const [voices, setVoices] = useState([]);
   const [selectedVoiceURI, setSelectedVoiceURI] = useState("");
 
-  // --- Core Data: Tokens (Word Granularity) ---
+  // --- Core Data: Tokens ---
   const [tokens, setTokens] = useState([]);
   const spanToTokensMap = useRef(new Map());
-   
-  // Editor State
-  const [selectedTokenIds, setSelectedTokenIds] = useState([]);
-  const [editorMode, setEditorMode] = useState(null); // 'edit' | null
-  const [editValue, setEditValue] = useState("");
-
+  
   const isPlayingRef = useRef(false); 
   const rateRef = useRef(1.0);
   const isSwitchingRef = useRef(false);
-  const audioMapRef = useRef([]); // Playback index -> Token
-   
+  const audioMapRef = useRef([]); 
+    
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const textLayerRef = useRef(null);
@@ -54,13 +39,21 @@ const App = () => {
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { rateRef.current = rate; }, [rate]);
 
+  // Log transcript when tokens update
+  useEffect(() => {
+    if (tokens.length > 0) {
+        const fullText = tokens.map(t => t.text).join(' | ');
+        console.log("--- Page Transcript ---");
+        console.log(fullText);
+    }
+  }, [tokens]);
+
   // Load Voices
   useEffect(() => {
     const loadVoices = () => {
       const available = window.speechSynthesis.getVoices();
       setVoices(available);
       if (available.length > 0 && !selectedVoiceURI) {
-        // Default to a local English voice if available, else first
         const defaultVoice = available.find(v => v.default) || available[0];
         setSelectedVoiceURI(defaultVoice?.voiceURI || "");
       }
@@ -74,12 +67,10 @@ const App = () => {
   const onFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    setFileName(file.name);
     const data = await file.arrayBuffer();
     const loadingTask = pdfjsLib.getDocument({ data });
     const pdfDoc = await loadingTask.promise;
     setPdf(pdfDoc);
-    setNumPages(pdfDoc.numPages);
     setPageNum(1);
   };
 
@@ -93,7 +84,6 @@ const App = () => {
     spanToTokensMap.current.clear();
 
     const page = await pdf.getPage(num);
-
     const visualScale = 1.5; 
     const pixelRatio = window.devicePixelRatio || 1; 
 
@@ -112,7 +102,6 @@ const App = () => {
         canvasRef.current.height = renderViewport.height;
         canvasRef.current.style.width = `${displayViewport.width}px`;
         canvasRef.current.style.height = `${displayViewport.height}px`;
-
         await page.render({ canvasContext: ctx, viewport: renderViewport }).promise;
     }
 
@@ -142,9 +131,8 @@ const App = () => {
             while ((match = regex.exec(text)) !== null) {
                 const token = {
                     id: globalId++,
-                    text: match[0],           
-                    spokenText: match[0],     
-                    isSkipped: false,         
+                    text: match[0],            
+                    spokenText: match[0],      
                     spanElement: span,        
                     startOffset: match.index,
                     endOffset: regex.lastIndex 
@@ -158,7 +146,7 @@ const App = () => {
         setTokens(allTokens);
     }
   }, [pdf]);
-   
+    
   useEffect(() => {
     if (pdf) renderPage(pageNum);
   }, [pdf, pageNum, renderPage]);
@@ -178,31 +166,25 @@ const App = () => {
 
     for (let i = startIndexInArray; i < tokens.length; i++) {
         const token = tokens[i];
-        if (token.isSkipped) continue;
-
         const start = script.length;
         const textToRead = token.spokenText;
         const end = start + textToRead.length;
 
         map.push({ start, end, token });
-        
         script += textToRead + " "; 
     }
 
     audioMapRef.current = map;
-    
     if (!script.trim()) return;
 
     const utter = new SpeechSynthesisUtterance(script);
     utter.rate = rateRef.current;
     
-    // Apply Selected Voice
     const targetVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
     if (targetVoice) {
         utter.voice = targetVoice;
         utter.lang = targetVoice.lang;
     } else {
-        // Fallback detection if no voice selected
         const isChinese = /[\u4e00-\u9fa5]/.test(script.trim()[0]);
         utter.lang = isChinese ? 'zh-CN' : 'en-US';
     }
@@ -213,9 +195,7 @@ const App = () => {
         const currentIdx = event.charIndex;
         const entry = audioMapRef.current.find(m => currentIdx >= m.start && currentIdx < m.end);
         
-        if (entry) {
-            highlightToken(entry.token);
-        }
+        if (entry) highlightToken(entry.token);
     };
 
     utter.onend = () => {
@@ -245,7 +225,7 @@ const App = () => {
       } catch (e) { }
   };
 
-  // 3. Interaction Logic
+  // 3. Interaction Logic (Click to play)
   const handleCanvasClick = (e) => {
     let range;
     if (document.caretRangeFromPoint) range = document.caretRangeFromPoint(e.clientX, e.clientY);
@@ -265,8 +245,6 @@ const App = () => {
         const clickedToken = tokensInSpan.find(t => clickOffset >= t.startOffset && clickOffset <= t.endOffset);
         
         if (clickedToken) {
-            if (clickedToken.isSkipped) return;
-
             isSwitchingRef.current = true;
             synth.cancel();
             setIsPlaying(true);
@@ -294,120 +272,24 @@ const App = () => {
     setSelectedVoiceURI(newVoice);
     if (isPlaying) {
         synth.cancel();
-        // Short timeout to allow state to settle and cancel to finish
-        setTimeout(() => {
-             speakFromToken(); // Resume from start or store current index (advanced)
-        }, 50);
+        setTimeout(() => speakFromToken(), 50);
     }
-  };
-
-  // 4. Editor Interaction Logic
-  const handleTokenSelect = (tokenId, isMultiSelect) => {
-      if (isMultiSelect) {
-          setSelectedTokenIds(prev => prev.includes(tokenId) ? prev.filter(id => id !== tokenId) : [...prev, tokenId]);
-      } else {
-          setSelectedTokenIds([tokenId]);
-      }
-      setEditorMode(null); 
-  };
-
-  const handleSkip = () => {
-      setTokens(prev => prev.map(t => selectedTokenIds.includes(t.id) ? { ...t, isSkipped: !t.isSkipped } : t));
-      setSelectedTokenIds([]); 
-  };
-
-  const handleEditStart = () => {
-      const firstToken = tokens.find(t => t.id === selectedTokenIds[0]);
-      if (firstToken) {
-          setEditValue(firstToken.spokenText);
-          setEditorMode('edit');
-      }
-  };
-
-  const handleEditConfirm = () => {
-      const sortedIds = [...selectedTokenIds].sort((a,b) => a-b);
-      
-      setTokens(prev => prev.map(t => {
-          if (t.id === sortedIds[0]) {
-              return { ...t, spokenText: editValue };
-          } else if (sortedIds.includes(t.id)) {
-              return { ...t, spokenText: "" }; 
-          }
-          return t;
-      }));
-      
-      setEditorMode(null);
-      setSelectedTokenIds([]);
   };
 
   return (
     <div className="app-layout">
-      {/* --- Left Side: Smart Script Editor --- */}
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="logo-icon">SR</div>
-          <h1>Transcript</h1>
-        </div>
-
-        <div className="transcript-content">
-            {tokens.length === 0 && <div className="hint-text">Load PDF to view script</div>}
-            
-            <div className="word-stream">
-                {tokens.map(token => (
-                    <span 
-                        key={token.id}
-                        className={`
-                            script-word 
-                            ${selectedTokenIds.includes(token.id) ? 'selected' : ''}
-                            ${token.isSkipped ? 'skipped' : ''}
-                            ${token.spokenText !== token.text && !token.isSkipped ? 'modified' : ''}
-                        `}
-                        onClick={(e) => handleTokenSelect(token.id, e.metaKey || e.ctrlKey)}
-                    >
-                        {token.text}
-                    </span>
-                ))}
-            </div>
-        </div>
-
-        {selectedTokenIds.length > 0 && (
-            <div className="action-panel">
-                {editorMode === 'edit' ? (
-                    <div className="edit-box">
-                        <input 
-                            autoFocus
-                            value={editValue} 
-                            onChange={e => setEditValue(e.target.value)} 
-                            onKeyDown={e => e.key === 'Enter' && handleEditConfirm()}
-                        />
-                        <button onClick={handleEditConfirm}><Icons.Check /></button>
-                        <button onClick={() => setEditorMode(null)}><Icons.Close /></button>
-                    </div>
-                ) : (
-                    <div className="btn-group">
-                        <button onClick={handleEditStart} className="btn-action">
-                            <Icons.Edit /> Edit Text
-                        </button>
-                        <button onClick={handleSkip} className="btn-action">
-                            <Icons.EyeOff /> {tokens.find(t => t.id === selectedTokenIds[0])?.isSkipped ? "Unskip" : "Skip"}
-                        </button>
-                    </div>
-                )}
-            </div>
-        )}
-
-        <div className="sidebar-footer">
-             <label className="upload-btn">
-                <Icons.Upload /> Open PDF
-                <input type="file" accept="application/pdf" onChange={onFileChange} style={{display:'none'}} />
-            </label>
-        </div>
-      </aside>
-
-      {/* --- Right Side: PDF Reader --- */}
+      {/* --- Main PDF Reader --- */}
       <main className="main-content">
         <div className="reader-viewport">
-            {!pdf ? <div className="empty-placeholder"><h3>Ready to Read</h3></div> : (
+            {!pdf ? (
+                <div className="empty-placeholder">
+                    <h3>PDF Audio Reader</h3>
+                    <label className="upload-btn main-upload">
+                        <Icons.Upload /> Open PDF File
+                        <input type="file" accept="application/pdf" onChange={onFileChange} style={{display:'none'}} />
+                    </label>
+                </div>
+            ) : (
                 <div className="pdf-surface">
                     <div ref={containerRef} className="pdf-container">
                         <canvas ref={canvasRef} />
@@ -450,6 +332,12 @@ const App = () => {
                     <input type="range" min="0.5" max="3.0" step="0.1" value={rate} onChange={e => setRate(Number(e.target.value))} />
                     <span className="speed-val">{rate.toFixed(1)}x</span>
                 </div>
+
+                {/* Inline Upload for swapping files */}
+                <label className="upload-btn icon-only">
+                    <Icons.Upload />
+                    <input type="file" accept="application/pdf" onChange={onFileChange} style={{display:'none'}} />
+                </label>
             </div>
         )}
       </main>
@@ -459,37 +347,6 @@ const App = () => {
         body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f0f11; color: #e4e4e7; height: 100vh; overflow: hidden; }
         .app-layout { display: flex; height: 100vh; width: 100vw; }
         
-        /* Sidebar (Script Editor) */
-        .sidebar { width: 320px; background: #18181b; border-right: 1px solid #27272a; display: flex; flex-direction: column; flex-shrink: 0; position: relative; }
-        .brand { padding: 20px; border-bottom: 1px solid #27272a; display: flex; align-items: center; gap: 10px; }
-        .logo-icon { width: 24px; height: 24px; background: #6366f1; border-radius: 6px; color: #fff; display: grid; place-items: center; font-weight: bold; font-size: 12px; }
-        .brand h1 { font-size: 16px; font-weight: 600; margin: 0; color: #fff; }
-        
-        .transcript-content { flex: 1; overflow-y: auto; padding: 20px; font-size: 14px; line-height: 1.6; color: #a1a1aa; }
-        .word-stream { display: flex; flex-wrap: wrap; gap: 4px; align-content: flex-start; }
-        
-        /* Token Styles */
-        .script-word { cursor: pointer; padding: 1px 3px; border-radius: 4px; transition: all 0.1s; }
-        .script-word:hover { background: rgba(255,255,255,0.1); color: #fff; }
-        .script-word.selected { background: #6366f1; color: #fff; }
-        .script-word.skipped { text-decoration: line-through; opacity: 0.3; }
-        .script-word.modified { color: #34d399; border-bottom: 1px dotted #34d399; }
-
-        .action-panel { padding: 15px; background: #27272a; border-top: 1px solid #3f3f46; }
-        .btn-group { display: flex; gap: 10px; }
-        .btn-action { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; background: #3f3f46; border: none; border-radius: 6px; color: #fff; cursor: pointer; font-size: 12px; }
-        .btn-action:hover { background: #52525b; }
-        
-        .edit-box { display: flex; gap: 8px; }
-        .edit-box input { flex: 1; background: #18181b; border: 1px solid #6366f1; color: #fff; padding: 6px; border-radius: 4px; outline: none; }
-        .edit-box button { background: #3f3f46; border: none; color: #fff; width: 32px; border-radius: 4px; cursor: pointer; display: grid; place-items: center; }
-        .edit-box button:hover { background: #6366f1; }
-
-        .sidebar-footer { padding: 15px; border-top: 1px solid #27272a; }
-        .upload-btn { display: flex; align-items: center; justify-content: center; gap: 8px; background: #6366f1; color: #fff; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px; }
-        .upload-btn:hover { opacity: 0.9; }
-
-        /* Main Content */
         .main-content { flex: 1; display: flex; flex-direction: column; position: relative; background: #0f0f11; }
         .reader-viewport { flex: 1; overflow: auto; display: flex; justify-content: center; padding: 40px; }
         .pdf-surface { position: relative; box-shadow: 0 20px 50px rgba(0,0,0,0.5); height: fit-content; }
@@ -499,10 +356,17 @@ const App = () => {
         .textLayer span { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
         .highlight-box { position: absolute; background-color: rgba(99, 102, 241, 0.3); border: 2px solid #6366f1; border-radius: 2px; pointer-events: none; z-index: 10; mix-blend-mode: multiply; transition: all 0.05s linear; }
         
-        .empty-placeholder { margin-top: 20vh; color: #555; }
+        .empty-placeholder { display:flex; flex-direction:column; align-items:center; margin-top: 30vh; color: #555; gap: 20px; }
+        .empty-placeholder h3 { font-weight: 400; font-size: 24px; color: #71717a; margin: 0; }
+
+        .upload-btn { display: flex; align-items: center; justify-content: center; gap: 8px; background: #27272a; color: #e4e4e7; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px; border: 1px solid #3f3f46; transition: all 0.2s; }
+        .upload-btn:hover { background: #3f3f46; border-color: #6366f1; }
+        .upload-btn.main-upload { background: #6366f1; color: white; border: none; padding: 12px 24px; font-size: 16px; }
+        .upload-btn.main-upload:hover { opacity: 0.9; background: #6366f1; }
+        .upload-btn.icon-only { padding: 10px; }
         
         /* Player */
-        .player-bar { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); width: 600px; background: rgba(39, 39, 42, 0.95); border: 1px solid #3f3f46; border-radius: 16px; padding: 12px 24px; display: flex; align-items: center; gap: 20px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); z-index: 100; backdrop-filter: blur(10px); }
+        .player-bar { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); width: 640px; background: rgba(39, 39, 42, 0.95); border: 1px solid #3f3f46; border-radius: 16px; padding: 12px 24px; display: flex; align-items: center; gap: 20px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); z-index: 100; backdrop-filter: blur(10px); }
         .player-controls { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
         .play-fab { width: 40px; height: 40px; border-radius: 50%; background: #fff; color: #000; border: none; cursor: pointer; display: grid; place-items: center; }
         .player-status { font-size: 13px; color: #fff; font-weight: 500; min-width: 60px; }
