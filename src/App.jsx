@@ -14,7 +14,8 @@ const Icons = {
   Edit: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
   EyeOff: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M1 1l22 22"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/></svg>,
   Check: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>,
-  Close: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  Close: () => <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>,
+  Voice: () => <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
 };
 
 const App = () => {
@@ -22,17 +23,19 @@ const App = () => {
   const [fileName, setFileName] = useState("");
   const [pageNum, setPageNum] = useState(1);
   const [numPages, setNumPages] = useState(0);
-  
+   
   const [highlight, setHighlight] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [rate, setRate] = useState(1.0);
 
+  // --- Voice State ---
+  const [voices, setVoices] = useState([]);
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState("");
+
   // --- Core Data: Tokens (Word Granularity) ---
-  // Each Token = { id, text, spokenText, isSkipped, spanElement, startOffset, endOffset }
   const [tokens, setTokens] = useState([]);
-  // Map for click interactions: SpanElement -> [Token1, Token2...]
   const spanToTokensMap = useRef(new Map());
-  
+   
   // Editor State
   const [selectedTokenIds, setSelectedTokenIds] = useState([]);
   const [editorMode, setEditorMode] = useState(null); // 'edit' | null
@@ -42,7 +45,7 @@ const App = () => {
   const rateRef = useRef(1.0);
   const isSwitchingRef = useRef(false);
   const audioMapRef = useRef([]); // Playback index -> Token
-  
+   
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const textLayerRef = useRef(null);
@@ -51,7 +54,23 @@ const App = () => {
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { rateRef.current = rate; }, [rate]);
 
-  // 1. PDF Loading & Parsing (Word-Level Tokenization)
+  // Load Voices
+  useEffect(() => {
+    const loadVoices = () => {
+      const available = window.speechSynthesis.getVoices();
+      setVoices(available);
+      if (available.length > 0 && !selectedVoiceURI) {
+        // Default to a local English voice if available, else first
+        const defaultVoice = available.find(v => v.default) || available[0];
+        setSelectedVoiceURI(defaultVoice?.voiceURI || "");
+      }
+    };
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+    return () => { window.speechSynthesis.onvoiceschanged = null; };
+  }, [selectedVoiceURI]);
+
+  // 1. PDF Loading & Parsing
   const onFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -75,20 +94,13 @@ const App = () => {
 
     const page = await pdf.getPage(num);
 
-    // --- DPI FIX START ---
-    const visualScale = 1.5; // Controls the visual zoom size
-    const pixelRatio = window.devicePixelRatio || 1; // e.g., 2.0 on Retina
+    const visualScale = 1.5; 
+    const pixelRatio = window.devicePixelRatio || 1; 
 
-    // 1. Viewport for Layout (Text Layer & Container CSS)
     const displayViewport = page.getViewport({ scale: visualScale });
-
-    // 2. Viewport for Rendering (Canvas Resolution)
-    // We multiply by pixelRatio to generate high-res pixels
     const renderViewport = page.getViewport({ scale: visualScale * pixelRatio });
-    // --- DPI FIX END ---
 
     if (containerRef.current) {
-        // Container matches the visual size
         containerRef.current.style.width = `${displayViewport.width}px`;
         containerRef.current.style.height = `${displayViewport.height}px`;
         containerRef.current.style.setProperty('--scale-factor', visualScale);
@@ -96,22 +108,16 @@ const App = () => {
 
     if (canvasRef.current) {
         const ctx = canvasRef.current.getContext('2d');
-
-        // Set actual pixel dimensions to High Res
         canvasRef.current.width = renderViewport.width;
         canvasRef.current.height = renderViewport.height;
-
-        // Force CSS to shrink it back to visual size
         canvasRef.current.style.width = `${displayViewport.width}px`;
         canvasRef.current.style.height = `${displayViewport.height}px`;
 
-        // Render using the High Res viewport
         await page.render({ canvasContext: ctx, viewport: renderViewport }).promise;
     }
 
     if (textLayerRef.current) {
         textLayerRef.current.innerHTML = '';
-        // Text layer matches visual size to align with CSS
         textLayerRef.current.style.width = `${displayViewport.width}px`;
         textLayerRef.current.style.height = `${displayViewport.height}px`;
 
@@ -119,12 +125,10 @@ const App = () => {
         await pdfjsLib.renderTextLayer({
             textContent: textContent,
             container: textLayerRef.current,
-            viewport: displayViewport, // Critical: Use displayViewport here so text aligns with cursor
+            viewport: displayViewport, 
             enhanceTextSelection: true
         }).promise;
 
-        // --- Core: Decompose Spans into Words (Tokens) ---
-        // (Rest of your existing logic remains exactly the same)
         const spans = Array.from(textLayerRef.current.querySelectorAll('span'));
         let allTokens = [];
         let globalId = 0;
@@ -138,10 +142,10 @@ const App = () => {
             while ((match = regex.exec(text)) !== null) {
                 const token = {
                     id: globalId++,
-                    text: match[0],          
-                    spokenText: match[0],    
-                    isSkipped: false,        
-                    spanElement: span,       
+                    text: match[0],           
+                    spokenText: match[0],     
+                    isSkipped: false,         
+                    spanElement: span,        
                     startOffset: match.index,
                     endOffset: regex.lastIndex 
                 };
@@ -154,27 +158,24 @@ const App = () => {
         setTokens(allTokens);
     }
   }, [pdf]);
-  
+   
   useEffect(() => {
     if (pdf) renderPage(pageNum);
   }, [pdf, pageNum, renderPage]);
 
-  // 2. Speech Engine (Token-based)
+  // 2. Speech Engine
   const speakFromToken = (startTokenId) => {
     if (!isPlayingRef.current) return;
 
-    // Build synthesis script
     let script = "";
-    const map = []; // Char Index -> Token
+    const map = []; 
 
-    // Find starting Token index
     let startIndexInArray = 0;
     if (startTokenId !== undefined) {
         startIndexInArray = tokens.findIndex(t => t.id === startTokenId);
         if (startIndexInArray === -1) startIndexInArray = 0;
     }
 
-    // Concatenate from the click position onwards
     for (let i = startIndexInArray; i < tokens.length; i++) {
         const token = tokens[i];
         if (token.isSkipped) continue;
@@ -183,10 +184,9 @@ const App = () => {
         const textToRead = token.spokenText;
         const end = start + textToRead.length;
 
-        // Record mapping
         map.push({ start, end, token });
         
-        script += textToRead + " "; // Add space for natural pause
+        script += textToRead + " "; 
     }
 
     audioMapRef.current = map;
@@ -196,15 +196,21 @@ const App = () => {
     const utter = new SpeechSynthesisUtterance(script);
     utter.rate = rateRef.current;
     
-    // Automatic language detection (simple check of first character)
-    const isChinese = /[\u4e00-\u9fa5]/.test(script.trim()[0]);
-    utter.lang = isChinese ? 'zh-CN' : 'en-US';
+    // Apply Selected Voice
+    const targetVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
+    if (targetVoice) {
+        utter.voice = targetVoice;
+        utter.lang = targetVoice.lang;
+    } else {
+        // Fallback detection if no voice selected
+        const isChinese = /[\u4e00-\u9fa5]/.test(script.trim()[0]);
+        utter.lang = isChinese ? 'zh-CN' : 'en-US';
+    }
 
     utter.onboundary = (event) => {
         if (!isPlayingRef.current) { synth.cancel(); return; }
         
         const currentIdx = event.charIndex;
-        // Lookup in map
         const entry = audioMapRef.current.find(m => currentIdx >= m.start && currentIdx < m.end);
         
         if (entry) {
@@ -224,7 +230,6 @@ const App = () => {
   const highlightToken = (token) => {
       try {
           const range = document.createRange();
-          // Highlight using precise Word offsets
           range.setStart(token.spanElement.firstChild, token.startOffset);
           range.setEnd(token.spanElement.firstChild, token.endOffset);
           
@@ -237,15 +242,11 @@ const App = () => {
               w: rect.width,
               h: rect.height
           });
-      } catch (e) {
-          // Fallback: If Range fails (e.g., span re-rendered), try highlighting the whole span
-          // console.warn(e);
-      }
+      } catch (e) { }
   };
 
   // 3. Interaction Logic
   const handleCanvasClick = (e) => {
-    // ... Find click position ...
     let range;
     if (document.caretRangeFromPoint) range = document.caretRangeFromPoint(e.clientX, e.clientY);
     else if (document.caretPositionFromPoint) {
@@ -259,19 +260,13 @@ const App = () => {
     const targetSpan = range.startContainer.parentElement;
     const clickOffset = range.startOffset;
 
-    // Reverse lookup Token
     const tokensInSpan = spanToTokensMap.current.get(targetSpan);
     if (tokensInSpan) {
-        // Find the Token containing the click Offset
         const clickedToken = tokensInSpan.find(t => clickOffset >= t.startOffset && clickOffset <= t.endOffset);
         
         if (clickedToken) {
-            if (clickedToken.isSkipped) {
-                // If a skipped word is clicked, opt not to highlight or alert
-                return;
-            }
+            if (clickedToken.isSkipped) return;
 
-            // Toggle playback
             isSwitchingRef.current = true;
             synth.cancel();
             setIsPlaying(true);
@@ -294,6 +289,18 @@ const App = () => {
     }
   };
 
+  const handleVoiceChange = (e) => {
+    const newVoice = e.target.value;
+    setSelectedVoiceURI(newVoice);
+    if (isPlaying) {
+        synth.cancel();
+        // Short timeout to allow state to settle and cancel to finish
+        setTimeout(() => {
+             speakFromToken(); // Resume from start or store current index (advanced)
+        }, 50);
+    }
+  };
+
   // 4. Editor Interaction Logic
   const handleTokenSelect = (tokenId, isMultiSelect) => {
       if (isMultiSelect) {
@@ -301,16 +308,15 @@ const App = () => {
       } else {
           setSelectedTokenIds([tokenId]);
       }
-      setEditorMode(null); // Reset edit mode
+      setEditorMode(null); 
   };
 
   const handleSkip = () => {
       setTokens(prev => prev.map(t => selectedTokenIds.includes(t.id) ? { ...t, isSkipped: !t.isSkipped } : t));
-      setSelectedTokenIds([]); // Clear selection after operation
+      setSelectedTokenIds([]); 
   };
 
   const handleEditStart = () => {
-      // Get the text of the first selected token as initial value
       const firstToken = tokens.find(t => t.id === selectedTokenIds[0]);
       if (firstToken) {
           setEditValue(firstToken.spokenText);
@@ -319,20 +325,13 @@ const App = () => {
   };
 
   const handleEditConfirm = () => {
-      // Change the first selected token to new text, set others to empty or merge logic
-      // Simple strategy: Modify spokenText of the first token, keep others as is or skip?
-      // Better strategy: Only modify the spokenText of the first selected token. If multiple are selected, intention is usually to change the reading for the group.
-      // E.g., "Seq No" -> "Sequence Number". Token1="Seq", Token2="No".
-      // We set Token1.spoken = "Sequence Number", Token2.spoken = "" (empty string not read)
-      
-      const firstId = selectedTokenIds[0]; // Assume IDs are ordered, better to sort them
       const sortedIds = [...selectedTokenIds].sort((a,b) => a-b);
       
       setTokens(prev => prev.map(t => {
           if (t.id === sortedIds[0]) {
               return { ...t, spokenText: editValue };
           } else if (sortedIds.includes(t.id)) {
-              return { ...t, spokenText: "" }; // Do not read other selected words
+              return { ...t, spokenText: "" }; 
           }
           return t;
       }));
@@ -350,11 +349,9 @@ const App = () => {
           <h1>Transcript</h1>
         </div>
 
-        {/* Script Content Area (Document View) */}
         <div className="transcript-content">
             {tokens.length === 0 && <div className="hint-text">Load PDF to view script</div>}
             
-            {/* Render Word Stream */}
             <div className="word-stream">
                 {tokens.map(token => (
                     <span 
@@ -373,7 +370,6 @@ const App = () => {
             </div>
         </div>
 
-        {/* Bottom Action Bar (Appears when selected) */}
         {selectedTokenIds.length > 0 && (
             <div className="action-panel">
                 {editorMode === 'edit' ? (
@@ -436,6 +432,19 @@ const App = () => {
                         <span className="player-status">{isPlaying ? "Reading..." : "Paused"}</span>
                     </div>
                 </div>
+                
+                {/* Voice Selector */}
+                <div className="voice-group">
+                    <Icons.Voice />
+                    <select value={selectedVoiceURI} onChange={handleVoiceChange} className="voice-select">
+                        {voices.map(v => (
+                            <option key={v.voiceURI} value={v.voiceURI}>
+                                {v.name.slice(0, 20) + (v.name.length > 20 ? "..." : "")} ({v.lang})
+                            </option>
+                        ))}
+                    </select>
+                </div>
+
                 <div className="speed-slider-group">
                     <span>Speed</span>
                     <input type="range" min="0.5" max="3.0" step="0.1" value={rate} onChange={e => setRate(Number(e.target.value))} />
@@ -464,7 +473,7 @@ const App = () => {
         .script-word:hover { background: rgba(255,255,255,0.1); color: #fff; }
         .script-word.selected { background: #6366f1; color: #fff; }
         .script-word.skipped { text-decoration: line-through; opacity: 0.3; }
-        .script-word.modified { color: #34d399; border-bottom: 1px dotted #34d399; } /* Modified words show in green */
+        .script-word.modified { color: #34d399; border-bottom: 1px dotted #34d399; }
 
         .action-panel { padding: 15px; background: #27272a; border-top: 1px solid #3f3f46; }
         .btn-group { display: flex; gap: 10px; }
@@ -493,12 +502,18 @@ const App = () => {
         .empty-placeholder { margin-top: 20vh; color: #555; }
         
         /* Player */
-        .player-bar { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); width: 450px; background: rgba(39, 39, 42, 0.95); border: 1px solid #3f3f46; border-radius: 16px; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 20px 40px rgba(0,0,0,0.4); z-index: 100; backdrop-filter: blur(10px); }
-        .player-controls { display: flex; align-items: center; gap: 16px; flex: 1; }
+        .player-bar { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); width: 600px; background: rgba(39, 39, 42, 0.95); border: 1px solid #3f3f46; border-radius: 16px; padding: 12px 24px; display: flex; align-items: center; gap: 20px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); z-index: 100; backdrop-filter: blur(10px); }
+        .player-controls { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
         .play-fab { width: 40px; height: 40px; border-radius: 50%; background: #fff; color: #000; border: none; cursor: pointer; display: grid; place-items: center; }
-        .player-status { font-size: 13px; color: #fff; font-weight: 500; }
-        .speed-slider-group { display: flex; align-items: center; gap: 10px; color: #fff; font-size: 12px; }
+        .player-status { font-size: 13px; color: #fff; font-weight: 500; min-width: 60px; }
+        
+        .voice-group { display: flex; align-items: center; gap: 8px; flex: 1; color: #a1a1aa; min-width: 0; }
+        .voice-select { flex: 1; background: #27272a; color: #e4e4e7; border: 1px solid #3f3f46; border-radius: 6px; padding: 6px; font-size: 12px; outline: none; cursor: pointer; width: 100%; text-overflow: ellipsis; }
+        .voice-select:hover { border-color: #6366f1; }
+        
+        .speed-slider-group { display: flex; align-items: center; gap: 10px; color: #fff; font-size: 12px; flex-shrink: 0; }
         input[type=range] { width: 80px; accent-color: #6366f1; }
+        .speed-val { width: 30px; text-align: right; }
         
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 3px; }
