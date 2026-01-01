@@ -74,44 +74,63 @@ const App = () => {
     spanToTokensMap.current.clear();
 
     const page = await pdf.getPage(num);
-    const scale = 1.5; 
-    const viewport = page.getViewport({ scale });
+
+    // --- DPI FIX START ---
+    const visualScale = 1.5; // Controls the visual zoom size
+    const pixelRatio = window.devicePixelRatio || 1; // e.g., 2.0 on Retina
+
+    // 1. Viewport for Layout (Text Layer & Container CSS)
+    const displayViewport = page.getViewport({ scale: visualScale });
+
+    // 2. Viewport for Rendering (Canvas Resolution)
+    // We multiply by pixelRatio to generate high-res pixels
+    const renderViewport = page.getViewport({ scale: visualScale * pixelRatio });
+    // --- DPI FIX END ---
 
     if (containerRef.current) {
-        containerRef.current.style.width = `${viewport.width}px`;
-        containerRef.current.style.height = `${viewport.height}px`;
-        containerRef.current.style.setProperty('--scale-factor', scale);
+        // Container matches the visual size
+        containerRef.current.style.width = `${displayViewport.width}px`;
+        containerRef.current.style.height = `${displayViewport.height}px`;
+        containerRef.current.style.setProperty('--scale-factor', visualScale);
     }
 
     if (canvasRef.current) {
         const ctx = canvasRef.current.getContext('2d');
-        canvasRef.current.width = viewport.width;
-        canvasRef.current.height = viewport.height;
-        await page.render({ canvasContext: ctx, viewport }).promise;
+
+        // Set actual pixel dimensions to High Res
+        canvasRef.current.width = renderViewport.width;
+        canvasRef.current.height = renderViewport.height;
+
+        // Force CSS to shrink it back to visual size
+        canvasRef.current.style.width = `${displayViewport.width}px`;
+        canvasRef.current.style.height = `${displayViewport.height}px`;
+
+        // Render using the High Res viewport
+        await page.render({ canvasContext: ctx, viewport: renderViewport }).promise;
     }
 
     if (textLayerRef.current) {
         textLayerRef.current.innerHTML = '';
-        textLayerRef.current.style.width = `${viewport.width}px`;
-        textLayerRef.current.style.height = `${viewport.height}px`;
+        // Text layer matches visual size to align with CSS
+        textLayerRef.current.style.width = `${displayViewport.width}px`;
+        textLayerRef.current.style.height = `${displayViewport.height}px`;
 
         const textContent = await page.getTextContent();
         await pdfjsLib.renderTextLayer({
             textContent: textContent,
             container: textLayerRef.current,
-            viewport: viewport,
+            viewport: displayViewport, // Critical: Use displayViewport here so text aligns with cursor
             enhanceTextSelection: true
         }).promise;
 
         // --- Core: Decompose Spans into Words (Tokens) ---
+        // (Rest of your existing logic remains exactly the same)
         const spans = Array.from(textLayerRef.current.querySelectorAll('span'));
         let allTokens = [];
         let globalId = 0;
 
         spans.forEach(span => {
             const text = span.textContent;
-            // Split words using regex, preserving original offsets
-            // Match non-whitespace characters
             const regex = /\S+/g; 
             let match;
             const spanTokens = [];
@@ -119,12 +138,12 @@ const App = () => {
             while ((match = regex.exec(text)) !== null) {
                 const token = {
                     id: globalId++,
-                    text: match[0],          // Original displayed text
-                    spokenText: match[0],    // Text to be spoken (editable)
-                    isSkipped: false,        // Whether to skip
-                    spanElement: span,       // Corresponding DOM element
-                    startOffset: match.index,// Start offset within the span
-                    endOffset: regex.lastIndex // End offset within the span
+                    text: match[0],          
+                    spokenText: match[0],    
+                    isSkipped: false,        
+                    spanElement: span,       
+                    startOffset: match.index,
+                    endOffset: regex.lastIndex 
                 };
                 allTokens.push(token);
                 spanTokens.push(token);
@@ -135,7 +154,7 @@ const App = () => {
         setTokens(allTokens);
     }
   }, [pdf]);
-
+  
   useEffect(() => {
     if (pdf) renderPage(pageNum);
   }, [pdf, pageNum, renderPage]);
