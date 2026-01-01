@@ -19,12 +19,13 @@ const PDFPage = ({
   onTokensParsed, 
   activeTokenId, 
   registerPageRef,
-  notifyPageVisible 
+  notifyPageVisible,
+  registerPageTokens // NEW PROP
 }) => {
   const [isVisible, setIsVisible] = useState(false);
   const [isRendered, setIsRendered] = useState(false);
   const [pageDimensions, setPageDimensions] = useState(null); 
-  const [hoveredTokenId, setHoveredTokenId] = useState(null); // New Hover State
+  const [hoveredTokenId, setHoveredTokenId] = useState(null);
     
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
@@ -110,6 +111,7 @@ const PDFPage = ({
             });
             
             pageTokensRef.current = localTokens;
+            registerPageTokens(pageNum, localTokens); // NEW: Register tokens
             setIsRendered(true);
         }
       } catch (err) {
@@ -117,7 +119,7 @@ const PDFPage = ({
       }
     };
     render();
-  }, [isVisible, pdfDoc, pageNum, scale, isRendered]);
+  }, [isVisible, pdfDoc, pageNum, scale, isRendered, registerPageTokens]);
 
   // --- Shared Logic for Click & Hover ---
   const getTokenFromEvent = (e) => {
@@ -145,7 +147,7 @@ const PDFPage = ({
   const handlePageClick = (e) => {
     const clickedToken = getTokenFromEvent(e);
     if (clickedToken) {
-        onTokensParsed(pageTokensRef.current, clickedToken.id);
+        onTokensParsed(pageTokensRef.current, clickedToken.id, pageNum); // Pass pageNum
     }
   };
 
@@ -242,6 +244,10 @@ const App = () => {
   const isSwitchingRef = useRef(false);
   const synth = window.speechSynthesis;
   const pageRefs = useRef({}); 
+  
+  // NEW: State for continuous reading
+  const pageTokensMap = useRef(new Map());
+  const waitingForPageRef = useRef(null);
 
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { rateRef.current = rate; }, [rate]);
@@ -264,6 +270,17 @@ const App = () => {
     return () => { window.speechSynthesis.onvoiceschanged = null; };
   }, [selectedVoiceURI]);
 
+  // NEW: Callback when a page finishes rendering
+  const handlePageTokensRegistered = useCallback((pageNum, tokens) => {
+    pageTokensMap.current.set(pageNum, tokens);
+    
+    // If we are waiting for this page to start reading
+    if (waitingForPageRef.current === pageNum && isPlayingRef.current) {
+        waitingForPageRef.current = null;
+        speakFromToken(null, tokens, pageNum);
+    }
+  }, []);
+
   const onFileChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -279,6 +296,8 @@ const App = () => {
     setCurrentTokens([]);
     setActiveTokenId(null);
     setIsPlaying(false);
+    pageTokensMap.current.clear();
+    waitingForPageRef.current = null;
     synth.cancel();
   };
 
@@ -296,18 +315,21 @@ const App = () => {
       }
   };
 
-  const handleTokenClick = useCallback((pageTokens, clickedTokenId) => {
+  const handleTokenClick = useCallback((pageTokens, clickedTokenId, pageNum) => {
       setCurrentTokens(pageTokens);
       isSwitchingRef.current = true;
       synth.cancel();
       setIsPlaying(true);
       isPlayingRef.current = true;
-      speakFromToken(clickedTokenId, pageTokens);
+      waitingForPageRef.current = null;
+      speakFromToken(clickedTokenId, pageTokens, pageNum);
       setTimeout(() => { isSwitchingRef.current = false; }, 200);
   }, [voices, selectedVoiceURI, rate]);
 
-  const speakFromToken = (startTokenId, tokensToRead = currentTokens) => {
+  const speakFromToken = (startTokenId, tokensToRead, pageNum) => {
     if (!isPlayingRef.current) return;
+
+    setCurrentTokens(tokensToRead); // Ensure UI highlights correct page
 
     let script = "";
     const map = []; 
@@ -328,7 +350,12 @@ const App = () => {
     }
 
     audioMapRef.current = map;
-    if (!script.trim()) return;
+    
+    if (!script.trim()) {
+        // Empty page or end of page? Move next immediately
+        handlePageEnd(pageNum);
+        return;
+    }
 
     const utter = new SpeechSynthesisUtterance(script);
     utter.rate = rateRef.current;
@@ -352,23 +379,51 @@ const App = () => {
 
     utter.onend = () => {
         if (isSwitchingRef.current) return;
-        setIsPlaying(false);
-        setActiveTokenId(null);
+        if (!isPlayingRef.current) return;
+        
+        // Audio finished naturally, go to next page
+        handlePageEnd(pageNum);
     };
     
     utter.onerror = () => setIsPlaying(false);
     synth.speak(utter);
   };
 
+  const handlePageEnd = (finishedPageNum) => {
+      if (finishedPageNum < numPages) {
+          const nextPage = finishedPageNum + 1;
+          setActivePage(nextPage);
+
+          // Scroll next page into view
+          if (pageRefs.current[nextPage]) {
+              pageRefs.current[nextPage].scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+
+          // Check if tokens are ready
+          const nextTokens = pageTokensMap.current.get(nextPage);
+          if (nextTokens) {
+              speakFromToken(null, nextTokens, nextPage);
+          } else {
+              waitingForPageRef.current = nextPage;
+          }
+      } else {
+          setIsPlaying(false);
+          setActiveTokenId(null);
+      }
+  };
+
   const togglePlay = () => {
     if (isPlaying) {
         setIsPlaying(false);
         isPlayingRef.current = false;
+        waitingForPageRef.current = null;
         synth.cancel();
     } else {
         setIsPlaying(true);
         isPlayingRef.current = true;
-        speakFromToken(activeTokenId || (currentTokens[0] ? currentTokens[0].id : undefined)); 
+        // Resume from current page or tokens
+        const tokens = pageTokensMap.current.get(activePage) || currentTokens;
+        speakFromToken(activeTokenId || (tokens[0] ? tokens[0].id : undefined), tokens, activePage); 
     }
   };
 
@@ -395,6 +450,7 @@ const App = () => {
                             onTokensParsed={handleTokenClick}
                             registerPageRef={registerPageRef}
                             notifyPageVisible={notifyPageVisible}
+                            registerPageTokens={handlePageTokensRegistered} // Passed here
                         />
                     ))}
                 </div>
@@ -461,7 +517,7 @@ const App = () => {
         .textLayer { position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow: hidden; opacity: 1; line-height: 1.0; transform-origin: 0 0; z-index: 2; }
         .textLayer span { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
         
-        .highlight-box { position: absolute; background-color: rgba(99, 102, 241, 0.3); border: 2px solid #6366f1; border-radius: 2px; pointer-events: none; z-index: 10; mix-blend-mode: multiply; transition: all 0.05s linear; }
+        .highlight-box { position: absolute; background-color: rgba(99, 102, 241, 0.3); border: 2px solid #6366f1; border-radius: 2px; pointer-events: none; z-index: 10; mix-blend-mode: multiply; transition: all 0.05s ease; }
         
         /* NEW HOVER STYLE */
         .hover-box { position: absolute; background-color: rgba(99, 102, 241, 0.2); border-radius: 2px; pointer-events: none; z-index: 5; mix-blend-mode: multiply; }
