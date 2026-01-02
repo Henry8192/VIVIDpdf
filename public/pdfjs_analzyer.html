@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Understanding PDF.js</title>
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.css">
+
+    <style>
+        /* --- LAYOUT & BASICS --- */
+        body { font-family: 'Segoe UI', system-ui, sans-serif; padding: 20px; background: #e0e0e0; color: #333; }
+        
+        h1, h2, h3, h4, h5 { margin-top: 0; }
+
+        /* --- CONTROLS --- */
+        #controls { 
+            margin-bottom: 20px; padding: 15px; background: white; 
+            border-bottom: 3px solid #333; display: flex; flex-direction: column; gap: 15px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .control-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px;}
+        
+        .toggle-group { display: flex; align-items: center; gap: 15px; background: #f4f4f4; padding: 8px 15px; border-radius: 4px; border: 1px solid #ccc;}
+        .toggle-label { font-size: 14px; cursor: pointer; display: flex; align-items: center; gap: 6px; user-select: none; }
+        input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #333; }
+        input[type="radio"] { cursor: pointer; accent-color: #333; }
+        
+        /* Page Selector Styles */
+        .page-selector { display: flex; align-items: center; gap: 5px; font-weight: bold; }
+        input[type="number"] { width: 50px; padding: 4px; border: 1px solid #999; border-radius: 4px; text-align: center; }
+
+        /* --- VISUALIZATION AREA --- */
+        #comparison-container {
+            display: flex; gap: 20px; justify-content: center; align-items: flex-start; flex-wrap: wrap; margin-bottom: 30px;
+        }
+
+        .panel {
+            background: white; padding: 10px; border-radius: 4px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .panel-header {
+            display: flex; justify-content: space-between; align-items: center;
+            background: #444; color: #fff; padding: 8px; border-radius: 3px; margin-bottom: 10px;
+        }
+        .panel-header h4 { margin: 0; font-size: 1rem;}
+        
+        /* Dynamic Legend */
+        .legend { font-size: 11px; display: flex; gap: 10px; flex-wrap: wrap; max-width: 400px; justify-content: flex-end;}
+        .legend span { display: flex; align-items: center; gap: 4px; background: rgba(255,255,255,0.1); padding: 2px 5px; border-radius: 3px;}
+        .dot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; border: 1px solid #fff; }
+
+        .page-wrapper {
+            position: relative; border: 1px solid #999; overflow: hidden; background: #fff;
+        }
+
+        /* --- LAYER STYLES --- */
+        /* 1. Left (Processed) */
+        .textLayer { opacity: 1; }
+        .textLayer span {
+            border: 1px solid rgba(0,0,0,0.3); color: rgba(0, 0, 0, 0.8); 
+            box-sizing: border-box; background: rgba(255, 255, 0, 0.15); /* Yellow Tint */
+            cursor: crosshair; transition: all 0.1s;
+            display: flex; align-items: center; justify-content: center; overflow: hidden;
+        }
+
+        /* 2. Right (Raw) */
+        #raw-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        
+        .raw-item {
+            position: absolute; 
+            font-size: 10px; white-space: nowrap; overflow: hidden;
+            line-height: 1; cursor: crosshair; display: flex; align-items: center; justify-content: center;
+            border-width: 1px; border-style: solid;
+        }
+
+        /* Mode: EOL Colors */
+        .raw-item.mode-eol.standard { border-color: rgba(255, 0, 0, 0.4); background: rgba(255, 0, 0, 0.05); color: red; }
+        .raw-item.mode-eol.eol { border-color: rgba(0, 0, 255, 0.6); background: rgba(0, 0, 255, 0.1); color: blue; font-weight: bold; }
+        .raw-item.mode-eol.empty.standard { background-color: red; }
+        .raw-item.mode-eol.empty.eol { background-color: blue; }
+
+        /* Empty Item Structure */
+        .raw-item.empty {
+            border: none !important; 
+            min-width: 2px !important;
+            width: 2px !important;
+        }
+
+        /* Interactive Hover */
+        .textLayer span:hover, .raw-item:hover {
+            background-color: #00ffff !important; border-color: #000 !important;
+            border-width: 2px !important; z-index: 9999 !important;
+            color: black !important; opacity: 1 !important;
+            min-width: 15px !important; 
+        }
+
+        /* Number Mode Overrides */
+        .show-numbers .textLayer span, .show-numbers .raw-item {
+            font-size: 10px !important; font-weight: bold; color: #333 !important;
+            background: rgba(255, 255, 255, 0.9) !important;
+            width: auto !important; min-width: 15px !important; border: 1px solid #ccc !important;
+        }
+
+        /* --- INFO PANEL --- */
+        #info-panel {
+            background: #fff; padding: 20px; border-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 30px;
+        }
+        
+        #stats-bar {
+            display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;
+            margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #ddd;
+        }
+        .stat-box { background: #f9f9f9; padding: 10px; border-left: 5px solid #ccc; }
+        .stat-title { font-size: 0.75em; text-transform: uppercase; color: #666; font-weight: bold; margin-bottom: 5px;}
+        .stat-value { font-size: 1.4em; font-weight: bold; color: #333; }
+        .stat-sub { font-size: 0.8em; color: #888; }
+
+        #transcripts { display: flex; gap: 20px; }
+        .transcript-col { flex: 1; }
+        .transcript-col h5 { margin: 0 0 5px 0; color: #555; }
+        
+        textarea {
+            width: 100%; height: 200px; padding: 10px;
+            font-family: 'Consolas', monospace; font-size: 12px;
+            background: #222; color: #0f0; border: none; resize: vertical;
+            box-sizing: border-box; /* Added to ensure padding doesn't overflow */
+        }
+
+        /* --- INSPECTOR SECTION --- */
+        .inspector-container {
+            background: white; padding: 20px; border-radius: 4px; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1); border-top: 4px solid #333;
+        }
+        .inspector-header { margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        pre { background: #eee; padding: 10px; overflow-x: auto; max-height: 400px; border: 1px solid #ddd; font-family: monospace; }
+        .output-section h3 { margin-top: 25px; border-bottom: 1px solid #ccc; padding-bottom: 5px;}
+        .api-tag { font-family: 'Consolas', monospace; background: #d4e0ff; color: #003366; padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; display: block; margin-top: 5px; margin-bottom: 5px; border: 1px solid #acc4f7; }
+        .desc-text { color: #666; font-style: italic; margin-bottom: 10px; font-size: 0.9rem;}
+
+        /* --- COPY BUTTON STYLES --- */
+        .code-wrapper { position: relative; }
+        .copy-btn {
+            position: absolute; top: 5px; right: 5px; z-index: 10;
+            background: rgba(255, 255, 255, 0.9); border: 1px solid #ccc;
+            border-radius: 3px; padding: 3px 8px; font-size: 11px; font-family: sans-serif;
+            cursor: pointer; opacity: 0.6; transition: all 0.2s ease;
+            color: #333; font-weight: 600;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        .copy-btn:hover { opacity: 1; background: #fff; transform: translateY(-1px); box-shadow: 0 2px 4px rgba(0,0,0,0.15); }
+        .copy-btn:active { transform: translateY(0); }
+    </style>
+</head>
+<body>
+
+<div id="controls">
+    <div class="control-row">
+        <h3>Understanding PDF.js</h3>
+        <input type="file" id="file-upload" accept="application/pdf" />
+
+        <div class="toggle-group">
+            <div class="page-selector">
+                <label for="page-num">Page:</label>
+                <input type="number" id="page-num" min="1" value="1" disabled>
+                <span id="page-count">of -</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="control-row">
+        <div class="toggle-group">
+            <span style="font-weight:bold; color:#555; font-size:0.8em; text-transform:uppercase;">Visuals:</span>
+            <label class="toggle-label">
+                <input type="checkbox" id="mode-toggle">
+                <span>Ordering ID</span>
+            </label>
+        </div>
+
+        <div class="toggle-group">
+            <span style="font-weight:bold; color:#555; font-size:0.8em; text-transform:uppercase;">Color By:</span>
+            <label class="toggle-label">
+                <input type="radio" name="color-mode" value="eol" checked>
+                <span>EOL Status</span>
+            </label>
+            <label class="toggle-label">
+                <input type="radio" name="color-mode" value="font">
+                <span>Font Name</span>
+            </label>
+        </div>
+
+        <div class="toggle-group">
+            <span style="font-weight:bold; color:#555; font-size:0.8em; text-transform:uppercase;">Params:</span>
+            <label class="toggle-label" title="If checked, PDF.js will NOT merge adjacent text items.">
+                <input type="checkbox" id="check-disable-combine">
+                <span>disableCombine</span>
+            </label>
+            <label class="toggle-label" title="Attempt to normalize whitespace">
+                <input type="checkbox" id="check-normalize">
+                <span>normalizeWhitespace</span>
+            </label>
+        </div>
+    </div>
+</div>
+
+<div id="comparison-container">
+    <div class="panel">
+        <div class="panel-header"><h4>Processed DOM (TextLayer)</h4></div>
+        <div id="wrapper-left" class="page-wrapper">
+            <canvas id="canvas-left"></canvas>
+            <div id="text-layer-left" class="textLayer"></div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-header">
+            <h4>Raw Stream (getTextContent)</h4>
+            <div id="raw-legend" class="legend">
+                </div>
+        </div>
+        <div id="wrapper-right" class="page-wrapper">
+            <div id="raw-layer"></div>
+        </div>
+    </div>
+</div>
+
+<div id="info-panel">
+    <div id="stats-bar">
+        <div class="stat-box" style="border-color: black;">
+            <div class="stat-title">Processed Spans</div>
+            <div id="stat-left" class="stat-value">-</div>
+        </div>
+        <div class="stat-box" style="border-color: red;">
+            <div class="stat-title">Raw Stream Items</div>
+            <div id="stat-right" class="stat-value">-</div>
+        </div>
+        <div class="stat-box" style="border-color: orange;">
+            <div class="stat-title">Truly Empty</div>
+            <div id="stat-empty" class="stat-value">-</div>
+        </div>
+        <div class="stat-box" style="border-color: orange;">
+            <div class="stat-title">Whitespace Only</div>
+            <div id="stat-whitespace" class="stat-value">-</div>
+        </div>
+    </div>
+    <div id="transcripts">
+        <div class="transcript-col">
+            <h5>Extracted Text: Processed Layer</h5>
+            <div class="code-wrapper">
+                <button class="copy-btn">Copy</button>
+                <textarea id="log-left" readonly>Waiting for file...</textarea>
+            </div>
+        </div>
+        <div class="transcript-col">
+            <h5>Extracted Text: Raw Stream</h5>
+            <div class="code-wrapper">
+                <button class="copy-btn">Copy</button>
+                <textarea id="log-right" readonly>Waiting for file...</textarea>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="inspector-container">
+    <div class="inspector-header"><h2 style="margin:0">PDF.js Deep Inspector</h2></div>
+    <div id="meta-results"><p><i>Document metadata will appear here...</i></p></div>
+    <div id="page-results"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    // Global State
+    let currentPdfDoc = null;
+    let currentPageNum = 1;
+    let isNumberMode = false;
+    let colorMode = 'eol'; // 'eol' or 'font'
+
+    // Distinct Palette Generator
+    const PALETTE = [
+        '#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', 
+        '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', 
+        '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', 
+        '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080'
+    ];
+
+    // DOM Elements
+    const elements = {
+        fileInput: document.getElementById('file-upload'),
+        pageNumInput: document.getElementById('page-num'),
+        pageCountSpan: document.getElementById('page-count'),
+        modeToggle: document.getElementById('mode-toggle'),
+        colorRadios: document.getElementsByName('color-mode'),
+        checkDisableCombine: document.getElementById('check-disable-combine'),
+        checkNormalize: document.getElementById('check-normalize'),
+        wrapperLeft: document.getElementById('wrapper-left'),
+        canvasLeft: document.getElementById('canvas-left'),
+        textLayerLeft: document.getElementById('text-layer-left'),
+        wrapperRight: document.getElementById('wrapper-right'),
+        rawLayer: document.getElementById('raw-layer'),
+        rawLegend: document.getElementById('raw-legend'),
+        statLeft: document.getElementById('stat-left'),
+        statRight: document.getElementById('stat-right'),
+        statEmpty: document.getElementById('stat-empty'),
+        statWhitespace: document.getElementById('stat-whitespace'),
+        logLeft: document.getElementById('log-left'),
+        logRight: document.getElementById('log-right'),
+        metaResults: document.getElementById('meta-results'),
+        pageResults: document.getElementById('page-results')
+    };
+
+    // --- MAIN RENDERER ---
+    async function renderCurrentPage() {
+        if (!currentPdfDoc) return;
+
+        // Reset Logs
+        elements.logLeft.value = "Processing...";
+        elements.logRight.value = "Processing...";
+        elements.pageResults.innerHTML = "<p>Analyzing page data...</p>";
+        
+        const page = await currentPdfDoc.getPage(currentPageNum); 
+
+        // Config & Dimensions
+        const scale = 1.5;
+        const viewport = page.getViewport({ scale: scale });
+        const widthPx = Math.floor(viewport.width) + 'px';
+        const heightPx = Math.floor(viewport.height) + 'px';
+
+        [elements.wrapperLeft, elements.wrapperRight].forEach(div => {
+            div.style.width = widthPx;
+            div.style.height = heightPx;
+        });
+
+        // Render Canvas
+        elements.canvasLeft.width = Math.floor(viewport.width);
+        elements.canvasLeft.height = Math.floor(viewport.height);
+        await page.render({ canvasContext: elements.canvasLeft.getContext('2d'), viewport }).promise;
+
+        // GET TEXT CONTENT
+        const textContent = await page.getTextContent({ 
+            includeMarkedContent: true,
+            disableCombineTextItems: elements.checkDisableCombine.checked,
+            normalizeWhitespace: elements.checkNormalize.checked 
+        });
+
+        // Render Text Layer
+        elements.textLayerLeft.style.width = widthPx;
+        elements.textLayerLeft.style.height = heightPx;
+        elements.textLayerLeft.style.setProperty('--scale-factor', scale);
+        elements.textLayerLeft.innerHTML = '';
+        
+        await pdfjsLib.renderTextLayer({
+            textContentSource: textContent,
+            container: elements.textLayerLeft,
+            viewport: viewport,
+            textDivs: []
+        }).promise;
+
+        // Add metadata for Toggles
+        const leftSpans = elements.textLayerLeft.querySelectorAll('span');
+        let leftTranscript = [];
+        leftSpans.forEach((span, i) => {
+            const txt = span.textContent;
+            leftTranscript.push(`[${i+1}] ${txt}`);
+            span.dataset.text = txt;
+            span.dataset.index = i + 1;
+        });
+
+        // --- PREPARE FONTS FOR COLORING ---
+        const uniqueFonts = new Set();
+        textContent.items.forEach(item => uniqueFonts.add(item.fontName));
+        const fontList = Array.from(uniqueFonts).sort();
+        const fontColorMap = {};
+        fontList.forEach((font, i) => {
+            fontColorMap[font] = PALETTE[i % PALETTE.length];
+        });
+
+        // Render Raw Stream
+        elements.rawLayer.innerHTML = ''; 
+        let rawHtml = '';
+        let rightTranscript = [];
+        let countEmpty = 0;
+        let countWhitespace = 0;
+
+        textContent.items.forEach((item, index) => {
+            if (!item.transform) return;
+            // FIX: Ensure 'str' is defined. PDF.js items typically have .str, but safe-guarding avoids undefined errors.
+            const str = item.str || ''; 
+            const isEmpty = str === '';
+            
+            // FIX: Use 'str' check instead of 'item.str' directly in the logic below
+            if (isEmpty) countEmpty++;
+            if (str.trim() === '' && !isEmpty) countWhitespace++;
+
+            const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+            const fontHeight = Math.sqrt((tx[2] * tx[2]) + (tx[3] * tx[3])); 
+            const fontWidth = item.width * scale; 
+            const left = tx[4];
+            const top = tx[5] - fontHeight; 
+            const displayId = index + 1;
+            const safeStr = str.replace(/"/g, '&quot;');
+            
+            rightTranscript.push(`[${displayId}] "${str}"${item.hasEOL ? " [EOL]" : ""}`);
+
+            // --- COLOR LOGIC ---
+            let style = `left: ${left}px; top: ${top}px; height: ${fontHeight}px;`;
+            let classes = `raw-item ${isEmpty ? 'empty' : ''}`;
+            let tooltip = `ID: ${displayId} | Font: ${item.fontName} | '${safeStr}'`;
+            
+            if (colorMode === 'eol') {
+                // EOL MODE
+                classes += ` mode-eol ${item.hasEOL ? 'eol' : 'standard'}`;
+                // Width
+                style += `width: ${isEmpty ? 2 : Math.max(fontWidth, 10)}px;`;
+            } else {
+                // FONT MODE
+                classes += ` mode-font`;
+                const color = fontColorMap[item.fontName] || '#000';
+                
+                // If empty, line background is color. If not empty, border and text is color.
+                if (isEmpty) {
+                     style += `background-color: ${color}; width: 2px; border:none;`;
+                } else {
+                     style += `border-color: ${color}; color: ${color}; background: rgba(0,0,0,0.05); width: ${Math.max(fontWidth, 10)}px;`;
+                }
+            }
+
+            rawHtml += `<div class="${classes}" 
+                data-text="${safeStr}" 
+                data-index="${displayId}"
+                style="${style}" 
+                title="${tooltip}">${isEmpty ? '' : safeStr}</div>`;
+        });
+        
+        elements.rawLayer.innerHTML = rawHtml;
+
+        // UPDATE LEGEND
+        updateLegend(fontColorMap);
+
+        // Update Stats
+        elements.statLeft.textContent = leftSpans.length;
+        elements.statRight.textContent = textContent.items.length;
+        elements.statEmpty.textContent = countEmpty;
+        elements.statWhitespace.textContent = countWhitespace;
+        elements.logLeft.value = leftTranscript.join('\n');
+        elements.logRight.value = rightTranscript.join('\n');
+
+        updateVisualMode();
+        runInspector(page, textContent);
+    }
+
+    function updateLegend(fontMap) {
+        if (colorMode === 'eol') {
+            elements.rawLegend.innerHTML = `
+                <span><span class="dot" style="background:red"></span> Standard</span>
+                <span><span class="dot" style="background:blue"></span> hasEOL</span>
+            `;
+        } else {
+            let html = '';
+            for (const [font, color] of Object.entries(fontMap)) {
+                html += `<span><span class="dot" style="background:${color}"></span> ${font}</span>`;
+            }
+            elements.rawLegend.innerHTML = html || '<span>No text items found</span>';
+        }
+    }
+
+    // --- INSPECTOR LOGIC ---
+    async function runInspector(page, textContent) {
+        const resultsDiv = elements.pageResults;
+        try {
+            let outputHtml = `<div class="output-section"><h3>Analysis: Page ${currentPageNum}</h3>`;
+
+            // Helper to generate copy-enabled code block
+            const wrapCode = (json) => {
+                return `<div class="code-wrapper"><button class="copy-btn">Copy</button><pre>${JSON.stringify(json, null, 2)}</pre></div>`;
+            };
+
+            // 1. getTextContent
+            outputHtml += `<h3>1. getTextContent()</h3>
+                           <div class="api-tag">API: await page.getTextContent({ includeMarkedContent: boolean, disableCombineTextItems: boolean })</div>
+                           <div class="desc-text">
+                               <strong>Purpose:</strong> Retrieves the textual content of the page as a stream of text items. It is the primary method used for text selection and search overlays.<br/>
+                               <strong>Parameters:</strong><br/>
+                               <ul>
+                                   <li><code>includeMarkedContent</code> (boolean): If true, includes Marked Content (structure types like paragraphs, figures) in the stream.</li>
+                                   <li><code>disableCombineTextItems</code> (boolean): If true, prevents the library from merging adjacent text items that share the same font and baseline. Useful for debugging raw PDF streams.</li>
+                               </ul>
+                               <strong>Returns:</strong> A promise resolving to an object containing:
+                               <ul>
+                                   <li><code>items</code> (Array): An array of text item objects. Each item contains:
+                                        <ul>
+                                            <li><code>str</code>: The actual text string.</li>
+                                            <li><code>dir</code>: Text direction ('ltr' or 'rtl').</li>
+                                            <li><code>width</code>/<code>height</code>: Dimensions of the text block.</li>
+                                            <li><code>transform</code>: An array [a, b, c, d, x, y] representing the transformation matrix (scale, rotation, position).</li>
+                                            <li><code>fontName</code>: internal font reference ID (e.g., 'g_d0_f1').</li>
+                                            <li><code>hasEOL</code>: boolean indicating if the item is followed by an End of Line.</li>
+                                        </ul>
+                                   </li>
+                                   <li><code>styles</code> (Object): A map of font names to font style objects.</li>
+                               </ul>
+                           </div>
+                           ${wrapCode(textContent)}`;
+
+            // 2. getStructTree
+            const structTree = await page.getStructTree();
+            outputHtml += `<h3>2. getStructTree()</h3>
+                           <div class="api-tag">API: await page.getStructTree()</div>
+                           <div class="desc-text">
+                               <strong>Purpose:</strong> Retrieves the logical structure tree of the page (if the PDF is "Tagged"). This is crucial for accessibility (screen readers) as it defines the reading order and semantic meaning (Headers, Paragraphs, Tables).<br/>
+                               <strong>Returns:</strong> A promise resolving to the Root Dictionary of the structure tree, or <code>null</code> if no structure exists.<br/>
+                               <strong>Structure:</strong> The tree consists of <code>StructElement</code> nodes and <code>ContentItem</code> leaves.
+                           </div>
+                           ${wrapCode(structTree || "No Structure Tree found (PDF might not be Tagged)")}`;
+
+            // 3. getAnnotations
+            const annotations = await page.getAnnotations({ intent: 'display' });
+            outputHtml += `<h3>3. getAnnotations()</h3>
+                           <div class="api-tag">API: await page.getAnnotations({ intent: 'display' })</div>
+                           <div class="desc-text">
+                               <strong>Purpose:</strong> Fetches interactive elements on the page such as hyperlinks, form widgets (inputs, checkboxes), and popup annotations.<br/>
+                               <strong>Parameters:</strong>
+                               <ul>
+                                   <li><code>intent</code> (string): 'display' (for viewing), 'print' (for printing), or 'any'. Defaults to 'display'.</li>
+                               </ul>
+                               <strong>Returns:</strong> A promise resolving to an array of Annotation objects. Common properties include:
+                               <ul>
+                                   <li><code>subtype</code>: The type of annotation (e.g., 'Link', 'Widget', 'Text').</li>
+                                   <li><code>rect</code>: The bounding box [x1, y1, x2, y2].</li>
+                                   <li><code>url</code> / <code>dest</code>: The link destination (if subtype is Link).</li>
+                                   <li><code>fieldName</code> / <code>fieldValue</code>: For form widgets.</li>
+                               </ul>
+                           </div>
+                           ${wrapCode(annotations)}`;
+
+            // 4. getOperatorList
+            const ops = await page.getOperatorList();
+            const summary = {
+                fnArrayLength: ops.fnArray.length,
+                sampleCommands: ops.fnArray.slice(0, 5).map((fnId, i) => ({
+                    id: fnId,
+                    args: ops.argsArray[i]
+                }))
+            };
+            outputHtml += `<h3>4. getOperatorList() (Sample)</h3>
+                           <div class="api-tag">API: await page.getOperatorList()</div>
+                           <div class="desc-text">
+                               <strong>Purpose:</strong> Retrieves the low-level graphics operator list used to render the page onto a canvas. This exposes the raw PDF drawing commands.<br/>
+                               <strong>Returns:</strong> A promise resolving to a <code>PDFOperatorList</code> object containing:
+                               <ul>
+                                   <li><code>fnArray</code>: An array of integer IDs representing drawing commands (e.g., specific codes for 'moveTo', 'lineTo', 'showText').</li>
+                                   <li><code>argsArray</code>: An array matching <code>fnArray</code>, where each element is an array of arguments for that command.</li>
+                               </ul>
+                               <strong>Note:</strong> This is used internally by the <code>page.render()</code> method but can be inspected to understand exactly how lines and text are drawn.
+                           </div>
+                           ${wrapCode(summary)}`;
+
+            outputHtml += `</div>`;
+            resultsDiv.innerHTML = outputHtml;
+        } catch (error) {
+            resultsDiv.innerHTML = `<p style="color:red">Error in Inspector: ${error.message}</p>`;
+        }
+    }
+
+    // --- EVENT LISTENERS ---
+    elements.fileInput.addEventListener('change', async function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        const arrayBuffer = await file.arrayBuffer();
+        currentPdfDoc = await pdfjsLib.getDocument(arrayBuffer).promise;
+        
+        // Metadata
+        const meta = await currentPdfDoc.getMetadata();
+        
+        // Helper to generate copy-enabled code block for meta
+        const wrapCode = (json) => {
+                return `<div class="code-wrapper"><button class="copy-btn">Copy</button><pre>${JSON.stringify(json, null, 2)}</pre></div>`;
+        };
+
+        elements.metaResults.innerHTML = `<h3>Document Metadata</h3>
+                                          <div class="api-tag">API: await doc.getMetadata()</div>
+                                          <div class="desc-text">
+                                            <strong>Purpose:</strong> Retrieves global information about the PDF document.<br/>
+                                            <strong>Returns:</strong> Object containing:
+                                            <ul>
+                                                <li><code>info</code> (Object): Standard PDF info dictionary (Title, Author, Subject, Creator, CreationDate).</li>
+                                                <li><code>metadata</code> (Metadata): An object representing the XMP metadata stream (if available).</li>
+                                                <li><code>contentDispositionFilename</code> (String): Suggested filename if served via HTTP.</li>
+                                            </ul>
+                                          </div>
+                                          ${wrapCode(meta)}`;
+        
+        currentPageNum = 1;
+        elements.pageNumInput.value = 1;
+        elements.pageNumInput.max = currentPdfDoc.numPages;
+        elements.pageNumInput.disabled = false;
+        elements.pageCountSpan.textContent = `of ${currentPdfDoc.numPages}`;
+        
+        renderCurrentPage();
+    });
+
+    elements.pageNumInput.addEventListener('change', function() {
+        if (!currentPdfDoc) return;
+        let num = parseInt(this.value);
+        if (num < 1) num = 1;
+        if (num > currentPdfDoc.numPages) num = currentPdfDoc.numPages;
+        this.value = num;
+        currentPageNum = num;
+        renderCurrentPage();
+    });
+
+    // Toggle Listeners
+    elements.checkDisableCombine.addEventListener('change', renderCurrentPage);
+    elements.checkNormalize.addEventListener('change', renderCurrentPage);
+    elements.modeToggle.addEventListener('change', (e) => {
+        isNumberMode = e.target.checked;
+        updateVisualMode();
+    });
+
+    // Color Mode Listener
+    elements.colorRadios.forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            colorMode = e.target.value;
+            renderCurrentPage();
+        });
+    });
+
+    function updateVisualMode() {
+        const leftSpans = elements.textLayerLeft.querySelectorAll('span');
+        const rightItems = elements.rawLayer.querySelectorAll('.raw-item');
+        
+        const updateEl = (el) => {
+            if (isNumberMode) {
+                el.textContent = el.dataset.index;
+            } else {
+                el.textContent = el.dataset.text; 
+            }
+        };
+        leftSpans.forEach(updateEl);
+        rightItems.forEach(updateEl);
+        const action = isNumberMode ? 'add' : 'remove';
+        elements.wrapperLeft.classList[action]('show-numbers');
+        elements.wrapperRight.classList[action]('show-numbers');
+    }
+
+    // --- COPY BUTTON LOGIC ---
+    document.addEventListener('click', async (e) => {
+        if (!e.target.matches('.copy-btn')) return;
+        
+        const btn = e.target;
+        const wrapper = btn.closest('.code-wrapper');
+        const contentEl = wrapper.querySelector('textarea, pre');
+        if (!contentEl) return;
+
+        // Determine text source
+        const text = contentEl.tagName === 'TEXTAREA' ? contentEl.value : contentEl.innerText;
+        
+        try {
+            await navigator.clipboard.writeText(text);
+            const originalText = btn.textContent;
+            btn.textContent = 'Copied!';
+            btn.style.background = '#d4edda';
+            btn.style.borderColor = '#c3e6cb';
+            
+            setTimeout(() => {
+                btn.textContent = originalText;
+                btn.style.background = '';
+                btn.style.borderColor = '';
+            }, 1500);
+        } catch (err) {
+            console.error('Failed to copy', err);
+            btn.textContent = 'Error';
+            btn.style.background = '#f8d7da';
+        }
+    });
+</script>
+
+</body>
+</html>
