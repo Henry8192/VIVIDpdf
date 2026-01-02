@@ -18,10 +18,11 @@ const App = () => {
   const [jumpInput, setJumpInput] = useState("1");
   const [isInputFocused, setIsInputFocused] = useState(false);
 
-  // Zoom / View State
+  // Zoom / View / Rotation State
   const [scale, setScale] = useState(1.5);
-  const [zoomInput, setZoomInput] = useState("150"); // For the % input box
-  const [fitMode, setFitMode] = useState('custom'); // 'width', 'height', 'custom'
+  const [rotation, setRotation] = useState(0); //
+  const [zoomInput, setZoomInput] = useState("150"); 
+  const [fitMode, setFitMode] = useState('custom'); 
 
   // TTS State
   const [voices, setVoices] = useState([]);
@@ -40,7 +41,7 @@ const App = () => {
   const isSwitchingRef = useRef(false);
   const synth = window.speechSynthesis;
   const pageRefs = useRef({}); 
-  const viewportRef = useRef(null); // Ref for the scroll container
+  const viewportRef = useRef(null); 
   
   const pageTokensMap = useRef(new Map());
   const waitingForPageRef = useRef(null);
@@ -52,7 +53,7 @@ const App = () => {
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { rateRef.current = rate; }, [rate]);
 
-  // Sync Zoom Input when scale changes programmatically (e.g. via Fit button)
+  // Sync Zoom Input
   useEffect(() => {
       setZoomInput(Math.round(scale * 100).toString());
   }, [scale]);
@@ -75,9 +76,9 @@ const App = () => {
     return () => { window.speechSynthesis.onvoiceschanged = null; };
   }, [selectedVoiceURI]);
 
-  // --- Zoom Handlers ---
+  // --- Zoom & Rotation Handlers ---
   const updateScale = (newScale) => {
-      const clamped = Math.min(Math.max(newScale, 0.5), 5.0); // Limit between 50% and 500%
+      const clamped = Math.min(Math.max(newScale, 0.5), 5.0); 
       setScale(clamped);
       setFitMode('custom');
   };
@@ -89,40 +90,34 @@ const App = () => {
   
   const handleZoomInputBlur = () => {
       const val = parseInt(zoomInput, 10);
-      if (!isNaN(val)) {
-          updateScale(val / 100);
-      } else {
-          setZoomInput(Math.round(scale * 100).toString());
-      }
+      if (!isNaN(val)) updateScale(val / 100);
+      else setZoomInput(Math.round(scale * 100).toString());
   };
 
   const handleZoomInputKeyDown = (e) => {
-      if (e.key === 'Enter') {
-          e.target.blur();
-      }
+      if (e.key === 'Enter') e.target.blur();
+  };
+
+  const handleRotate = () => {
+      setRotation(prev => (prev + 90) % 360);
   };
 
   const toggleFitMode = async () => {
     if (!pdf || !viewportRef.current) return;
-
     try {
-        // Fetch current page to get its natural dimensions
         const page = await pdf.getPage(activePage);
-        const unscaledViewport = page.getViewport({ scale: 1.0 });
+        // We must consider rotation when calculating fit
+        const unscaledViewport = page.getViewport({ scale: 1.0, rotation: (page.rotate + rotation) % 360 });
         
         const containerWidth = viewportRef.current.clientWidth;
         const containerHeight = viewportRef.current.clientHeight;
-        
-        // Subtract generic padding (e.g. 40px) for scrollbars/margins
         const pad = 40; 
         
         if (fitMode === 'width') {
-            // Switch to Height Fit
             const newScale = (containerHeight - pad) / unscaledViewport.height;
             setScale(newScale);
             setFitMode('height');
         } else {
-            // Switch to Width Fit (Default from custom or height)
             const newScale = (containerWidth - pad) / unscaledViewport.width;
             setScale(newScale);
             setFitMode('width');
@@ -133,7 +128,6 @@ const App = () => {
   };
 
   // --- Existing Logic ---
-
   const handleAddSkipZone = useCallback((zone) => {
       setSkipZones(prev => [...prev, zone]);
   }, []);
@@ -151,7 +145,7 @@ const App = () => {
   }, []);
 
   const loadFromBlob = async (blob) => {
-    setIsLoading(true); // START LOADING
+    setIsLoading(true); 
     try {
         if (blob.name) { document.title = blob.name;}
         const data = await blob.arrayBuffer();
@@ -163,8 +157,8 @@ const App = () => {
         setActivePage(1);
         setJumpInput("1");
         
-        // Reset View
         setScale(1.5);
+        setRotation(0); // Reset rotation on new file
         setFitMode('custom');
 
         setCurrentTokens([]);
@@ -179,7 +173,7 @@ const App = () => {
         console.error("Error loading PDF:", error);
         alert("Failed to load PDF. Please ensure it is a valid file.");
     } finally {
-        setIsLoading(false); //STOP LOADING
+        setIsLoading(false); 
     }
   };
 
@@ -315,7 +309,6 @@ const App = () => {
 
       <main className="main-content">
         <div className="scroll-viewport" ref={viewportRef}>
-            {/* Loading Overlay */}
             {isLoading && (
                 <div className="loading-overlay">
                     <div className="spinner"></div>
@@ -337,7 +330,8 @@ const App = () => {
                             key={pageNum}
                             pdfDoc={pdf}
                             pageNum={pageNum}
-                            scale={scale} // Pass Dynamic Scale here
+                            scale={scale}
+                            rotation={rotation} // Pass rotation prop
                             activeTokenId={activeTokenId}
                             onTokensParsed={handleTokenClick}
                             registerPageRef={registerPageRef}
@@ -355,7 +349,6 @@ const App = () => {
 
         {pdf && (
             <div className="player-bar">
-                {/* --- Left: Play Controls --- */}
                 <div className="player-controls">
                     <button className="play-fab" onClick={togglePlay} disabled={isMarkingMode} style={{ opacity: isMarkingMode ? 0.5 : 1 }}>
                         {isPlaying ? <Icons.Pause /> : <Icons.Play />}
@@ -374,7 +367,6 @@ const App = () => {
                     </div>
                 </div>
                 
-                {/* --- Middle: Voice & Zoom --- */}
                 <div className="center-controls" style={{display:'flex', gap:'15px', alignItems:'center'}}>
                     <div className="voice-group">
                         <Icons.Voice />
@@ -385,7 +377,6 @@ const App = () => {
                         </select>
                     </div>
 
-                    {/* NEW ZOOM CONTROLS */}
                     <div className="zoom-group" style={{ display: 'flex', alignItems: 'center', background: '#f0f0f0', padding: '4px 8px', borderRadius: '8px' }}>
                         <button className="icon-btn-small" onClick={handleZoomOut} title="Zoom Out" style={{padding: '4px', cursor: 'pointer'}}>
                            <b>-</b>
@@ -412,17 +403,22 @@ const App = () => {
                         <button onClick={toggleFitMode} title="Toggle Fit" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '12px', fontWeight: '600', color: '#444' }}>
                            {fitMode === 'width' ? 'Fit W' : fitMode === 'height' ? 'Fit H' : 'Fit'}
                         </button>
+
+                        <div style={{width: '1px', height: '16px', background: '#ccc', margin: '0 8px'}}></div>
+
+                         {/* NEW ROTATE BUTTON */}
+                        <button onClick={handleRotate} title="Rotate 90°" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '16px', fontWeight: '600', color: '#444' }}>
+                            <Icons.Rotate style={{ fontSize: '20px' }} />
+                        </button>
                     </div>
                 </div>
 
-                {/* --- Right: Tools & Speed --- */}
                 <div className="right-controls" style={{display:'flex', gap:'10px', alignItems:'center'}}>
                     <button 
                         className={`icon-btn ${darkMode ? 'active' : ''}`} 
                         onClick={() => setDarkMode(!darkMode)} 
                         title="Toggle Dark Mode"
                     >
-                        {/* You can use a Moon icon if available, otherwise text */}
                         <span style={{fontSize:'14px'}}>🌗</span> 
                     </button>
 

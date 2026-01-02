@@ -2,8 +2,6 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import * as pdfjsLib from 'pdfjs-dist';
 import { Icons } from './Icons';
 
-// --- Helper: Check Intersection ---
-// Previously in pdfHelpers.js
 const isTokenInZone = (tokenRect, zoneRect) => {
   return !(
     tokenRect.right < zoneRect.left ||
@@ -17,6 +15,7 @@ const PDFPage = ({
   pdfDoc, 
   pageNum, 
   scale, 
+  rotation, // Receive rotation prop
   onTokensParsed, 
   activeTokenId, 
   registerPageRef,
@@ -31,7 +30,6 @@ const PDFPage = ({
   const [pageDimensions, setPageDimensions] = useState(null); 
   const [hoveredTokenId, setHoveredTokenId] = useState(null);
   
-  // Drawing state
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawStart, setDrawStart] = useState({ x: 0, y: 0 });
   const [currentRect, setCurrentRect] = useState(null);
@@ -66,9 +64,15 @@ const PDFPage = ({
         const page = await pdfDoc.getPage(pageNum);
         const pixelRatio = window.devicePixelRatio || 1;
         
-        // Base viewport
-        const viewport = page.getViewport({ scale: scale });
-        const renderViewport = page.getViewport({ scale: scale * pixelRatio });
+        // Base viewport with ROTATION
+        const viewport = page.getViewport({ 
+            scale: scale, 
+            rotation: (page.rotate + rotation) % 360 // Calculate combined rotation
+        });
+        const renderViewport = page.getViewport({ 
+            scale: scale * pixelRatio, 
+            rotation: (page.rotate + rotation) % 360 
+        });
 
         setPageDimensions({ width: viewport.width, height: viewport.height });
 
@@ -101,7 +105,6 @@ const PDFPage = ({
                 enhanceTextSelection: true
             }).promise;
 
-            // --- TOKEN GENERATION WITH FILTERING ---
             const spans = Array.from(textLayerRef.current.querySelectorAll('span'));
             let localTokens = [];
             let localIdCounter = 0;
@@ -167,7 +170,7 @@ const PDFPage = ({
 
     render();
     return () => { isCancelled = true; };
-  }, [isVisible, pdfDoc, pageNum, scale, skipZones, registerPageTokens]);
+  }, [isVisible, pdfDoc, pageNum, scale, rotation, skipZones, registerPageTokens]); // Add rotation to dep array
 
   // --- Drawing Logic ---
   const handleMouseDown = (e) => {
@@ -312,7 +315,6 @@ const PDFPage = ({
             {activeStyle && !isMarkingMode && <div className="highlight-box" style={activeStyle} />}
             {hoverStyle && !isMarkingMode && <div className="hover-box" style={hoverStyle} />}
 
-            {/* RENDER SKIP ZONES */}
             {pageDimensions && skipZones.map(zone => (
                 <div 
                     key={zone.id}
@@ -336,7 +338,6 @@ const PDFPage = ({
                 </div>
             ))}
 
-            {/* RENDER DRAWING PREVIEW */}
             {isDrawing && currentRect && (
                 <div 
                     className="skip-zone-drawing"
