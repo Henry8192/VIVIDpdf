@@ -2,6 +2,24 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import * as pdfjsLib from 'pdfjs-dist';
 import { Icons } from './Icons';
 
+// --- Text Merging Heuristics ---
+// Constants relative to font height to ensure zoom/scale invariance.
+const MERGE_CONFIG = {
+  // If the vertical difference between two tokens is > 50% of the font height,
+  // we consider them to be on separate lines.
+  MAX_VERTICAL_MISALIGNMENT: 0.5, 
+
+  // Max allowable horizontal gap between letters to merge them.
+  // 0.1 (10%) handles tiny rendering gaps but is strictly smaller than a 
+  // space character (usually ~0.25 - 0.33).
+  MAX_INTRA_WORD_GAP: 0.1, 
+
+  // Max allowable overlap (negative gap) between letters.
+  // 0.5 (50%) allows for italics (leaning characters) and ligatures (fi, fl)
+  // but prevents merging text that is simply printed on top of other text.
+  MAX_ALLOWED_OVERLAP: 0.5  
+};
+
 const isTokenInZone = (tokenRect, zoneRect) => {
   return !(
     tokenRect.right < zoneRect.left ||
@@ -15,7 +33,7 @@ const PDFPage = ({
   pdfDoc, 
   pageNum, 
   scale, 
-  rotation, // Receive rotation prop
+  rotation, 
   onTokensParsed, 
   activeTokenId, 
   registerPageRef,
@@ -64,10 +82,9 @@ const PDFPage = ({
         const page = await pdfDoc.getPage(pageNum);
         const pixelRatio = window.devicePixelRatio || 1;
         
-        // Base viewport with ROTATION
         const viewport = page.getViewport({ 
             scale: scale, 
-            rotation: (page.rotate + rotation) % 360 // Calculate combined rotation
+            rotation: (page.rotate + rotation) % 360 
         });
         const renderViewport = page.getViewport({ 
             scale: scale * pixelRatio, 
@@ -106,62 +123,144 @@ const PDFPage = ({
             }).promise;
 
             const spans = Array.from(textLayerRef.current.querySelectorAll('span'));
-            let localTokens = [];
-            let localIdCounter = 0;
-
+            let rawTokens = [];
+            
+            // 1. Extraction Pass: Get atomic tokens and physical bounds
             spans.forEach(span => {
                 const text = span.textContent;
-                if (!text.trim()) return;
+                if (!text.trim()) return; 
 
-                const spanLeft = span.offsetLeft;
-                const spanTop = span.offsetTop;
-                const spanWidth = span.offsetWidth;
-                const spanHeight = span.offsetHeight;
+                const containerRect = containerRef.current.getBoundingClientRect();
+                
+                const regex = /\S+/g;
+                let match;
+                while ((match = regex.exec(text)) !== null) {
+                    const range = document.createRange();
+                    range.setStart(span.firstChild, match.index);
+                    range.setEnd(span.firstChild, regex.lastIndex);
+                    const rect = range.getBoundingClientRect();
 
-                // Check overlap with skip zones
+                    rawTokens.push({
+                        text: match[0],
+                        spanElement: span,
+                        startOffset: match.index,
+                        endOffset: regex.lastIndex,
+                        bounds: {
+                            left: rect.left - containerRect.left,
+                            top: rect.top - containerRect.top,
+                            right: rect.right - containerRect.left,
+                            bottom: rect.bottom - containerRect.top,
+                            width: rect.width,
+                            height: rect.height
+                        }
+                    });
+                }
+            });
+
+            // 2. Merging Pass: Combine touching tokens
+            const mergedTokens = [];
+            if (rawTokens.length > 0) {
+                // FIXED: Do NOT sort rawTokens. 
+                // We rely on the DOM order provided by PDF.js, which usually respects 
+                // the logical reading order (columns, forms, etc.).
+                // We only merge if items are sequential in the DOM AND physically touching.
+
+                let currentToken = rawTokens[0];
+                currentToken.parts = [rawTokens[0]]; 
+
+                for (let i = 1; i < rawTokens.length; i++) {
+                    const nextToken = rawTokens[i];
+                    const prevBounds = currentToken.bounds;
+                    const nextBounds = nextToken.bounds;
+
+                    // Check 1: Vertical Alignment (Same Line?)
+                    const isSameLine = Math.abs(prevBounds.top - nextBounds.top) < 
+                                     (prevBounds.height * MERGE_CONFIG.MAX_VERTICAL_MISALIGNMENT);
+                    
+                    // Check 2: Horizontal Proximity (Touching?)
+                    const gap = nextBounds.left - prevBounds.right;
+                    
+                    const isGapSmallEnough = gap < (prevBounds.height * MERGE_CONFIG.MAX_INTRA_WORD_GAP);
+                    const isOverlapAcceptable = gap > -(prevBounds.height * MERGE_CONFIG.MAX_ALLOWED_OVERLAP);
+                    
+                    const isTouching = isGapSmallEnough && isOverlapAcceptable;
+
+                    if (isSameLine && isTouching) {
+                        // MERGE
+                        currentToken.text += nextToken.text;
+                        
+                        // Union Bounds
+                        const newLeft = Math.min(prevBounds.left, nextBounds.left);
+                        const newTop = Math.min(prevBounds.top, nextBounds.top);
+                        const newRight = Math.max(prevBounds.right, nextBounds.right);
+                        const newBottom = Math.max(prevBounds.bottom, nextBounds.bottom);
+                        
+                        currentToken.bounds = {
+                            left: newLeft,
+                            top: newTop,
+                            right: newRight,
+                            bottom: newBottom,
+                            width: newRight - newLeft,
+                            height: newBottom - newTop
+                        };
+                        currentToken.parts.push(nextToken);
+                    } else {
+                        // PUSH & RESET
+                        mergedTokens.push(currentToken);
+                        currentToken = nextToken;
+                        currentToken.parts = [nextToken];
+                    }
+                }
+                mergedTokens.push(currentToken);
+            }
+
+            // 3. Finalize & Register
+            let finalTokens = [];
+            spanMapRef.current.clear(); 
+
+            mergedTokens.forEach((t, index) => {
+                const finalToken = {
+                    id: `p${pageNum}_t${index}`,
+                    pageNum,
+                    text: t.text,
+                    spokenText: t.text,
+                    bounds: t.bounds,
+                    parts: t.parts
+                };
+
                 const isSkipped = skipZones.some(zone => {
-                    const zonePx = {
+                     const zonePx = {
                         left: zone.x * viewport.width,
                         top: zone.y * viewport.height,
                         right: (zone.x + zone.w) * viewport.width,
                         bottom: (zone.y + zone.h) * viewport.height
                     };
-                    const spanRect = {
-                        left: spanLeft,
-                        top: spanTop,
-                        right: spanLeft + spanWidth,
-                        bottom: spanTop + spanHeight
-                    };
-                    return isTokenInZone(spanRect, zonePx);
+                    return isTokenInZone(finalToken.bounds, zonePx);
                 });
 
                 if (isSkipped) {
-                    span.style.opacity = '0.2';
-                    span.style.textDecoration = 'line-through';
+                    t.parts.forEach(p => {
+                        p.spanElement.style.opacity = '0.2';
+                        p.spanElement.style.textDecoration = 'line-through';
+                    });
                     return; 
                 }
 
-                const regex = /\S+/g;
-                let match;
-                const spanTokens = [];
-                while ((match = regex.exec(text)) !== null) {
-                    const token = {
-                        id: `p${pageNum}_t${localIdCounter++}`,
-                        pageNum: pageNum,
-                        text: match[0],
-                        spokenText: match[0],
-                        spanElement: span,
-                        startOffset: match.index,
-                        endOffset: regex.lastIndex
-                    };
-                    localTokens.push(token);
-                    spanTokens.push(token);
-                }
-                spanMapRef.current.set(span, spanTokens);
+                t.parts.forEach(part => {
+                    const existing = spanMapRef.current.get(part.spanElement) || [];
+                    existing.push(finalToken);
+                    spanMapRef.current.set(part.spanElement, existing);
+                });
+
+                finalTokens.push(finalToken);
             });
-            
-            pageTokensRef.current = localTokens;
-            registerPageTokens(pageNum, localTokens);
+
+            // DEBUG LOGGING
+            const pageTranscript = finalTokens.map(t => t.text).join(' ');
+            console.log(`[DEBUG] Page ${pageNum} Transcript:`, pageTranscript);
+
+            pageTokensRef.current = finalTokens;
+            registerPageTokens(pageNum, finalTokens);
         }
       } catch (err) {
         console.error(`Error rendering page ${pageNum}`, err);
@@ -170,7 +269,7 @@ const PDFPage = ({
 
     render();
     return () => { isCancelled = true; };
-  }, [isVisible, pdfDoc, pageNum, scale, rotation, skipZones, registerPageTokens]); // Add rotation to dep array
+  }, [isVisible, pdfDoc, pageNum, scale, rotation, skipZones, registerPageTokens]);
 
   // --- Drawing Logic ---
   const handleMouseDown = (e) => {
@@ -229,13 +328,21 @@ const PDFPage = ({
     if (!range || range.startContainer.nodeType !== Node.TEXT_NODE) return null;
 
     const targetSpan = range.startContainer.parentElement;
-    const offset = range.startOffset;
-    const tokensInSpan = spanMapRef.current.get(targetSpan);
+    const candidates = spanMapRef.current.get(targetSpan);
+    if (!candidates) return null;
+    
+    if (candidates.length === 1) return candidates[0];
 
-    if (tokensInSpan) {
-        return tokensInSpan.find(t => offset >= t.startOffset && offset <= t.endOffset);
-    }
-    return null;
+    const rect = containerRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    return candidates.find(t => 
+        mouseX >= t.bounds.left && 
+        mouseX <= t.bounds.right && 
+        mouseY >= t.bounds.top && 
+        mouseY <= t.bounds.bottom
+    );
   };
 
   const handlePageClick = (e) => {
@@ -261,24 +368,10 @@ const PDFPage = ({
 
   // --- Style Calculations ---
   const getHighlightStyle = useCallback((tokenId) => {
-    if (!tokenId || !pageTokensRef.current.length || !containerRef.current) return null;
+    if (!tokenId || !pageTokensRef.current.length) return null;
     const token = pageTokensRef.current.find(t => t.id === tokenId);
-    if (!token) return null;
-
-    try {
-        const range = document.createRange();
-        range.setStart(token.spanElement.firstChild, token.startOffset);
-        range.setEnd(token.spanElement.firstChild, token.endOffset);
-        const rect = range.getBoundingClientRect();
-        const containerRect = containerRef.current.getBoundingClientRect();
-
-        return {
-            left: rect.left - containerRect.left,
-            top: rect.top - containerRect.top,
-            width: rect.width,
-            height: rect.height
-        };
-    } catch (e) { return null; }
+    if (!token || !token.bounds) return null;
+    return token.bounds; 
   }, []);
 
   const activeStyle = useMemo(() => getHighlightStyle(activeTokenId), [activeTokenId, getHighlightStyle]);
