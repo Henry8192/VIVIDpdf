@@ -45,6 +45,10 @@ const App = () => {
   const pageTokensMap = useRef(new Map());
   const waitingForPageRef = useRef(null);
 
+  // Visual State
+  const [isLoading, setIsLoading] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
+
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { rateRef.current = rate; }, [rate]);
 
@@ -147,6 +151,7 @@ const App = () => {
   }, []);
 
   const loadFromBlob = async (blob) => {
+    setIsLoading(true); // START LOADING
     try {
         if (blob.name) { document.title = blob.name;}
         const data = await blob.arrayBuffer();
@@ -173,6 +178,8 @@ const App = () => {
     } catch (error) {
         console.error("Error loading PDF:", error);
         alert("Failed to load PDF. Please ensure it is a valid file.");
+    } finally {
+        setIsLoading(false); //STOP LOADING
     }
   };
 
@@ -308,6 +315,13 @@ const App = () => {
 
       <main className="main-content">
         <div className="scroll-viewport" ref={viewportRef}>
+            {/* Loading Overlay */}
+            {isLoading && (
+                <div className="loading-overlay">
+                    <div className="spinner"></div>
+                    <p>Processing Document...</p>
+                </div>
+            )}
             {!pdf ? (
                 <div className="empty-placeholder">
                     <label className="upload-btn main-upload">
@@ -317,7 +331,7 @@ const App = () => {
                     <p style={{marginTop: '20px', color: '#666', fontSize: '14px'}}>or drag and drop a file here</p>
                 </div>
             ) : (
-                <div className="pdf-stream">
+                <div className={`pdf-stream ${darkMode ? 'dark-mode' : ''}`}>
                     {Array.from(new Array(numPages), (_, i) => i + 1).map(pageNum => (
                         <PDFPage 
                             key={pageNum}
@@ -403,6 +417,15 @@ const App = () => {
 
                 {/* --- Right: Tools & Speed --- */}
                 <div className="right-controls" style={{display:'flex', gap:'10px', alignItems:'center'}}>
+                    <button 
+                        className={`icon-btn ${darkMode ? 'active' : ''}`} 
+                        onClick={() => setDarkMode(!darkMode)} 
+                        title="Toggle Dark Mode"
+                    >
+                        {/* You can use a Moon icon if available, otherwise text */}
+                        <span style={{fontSize:'14px'}}>🌗</span> 
+                    </button>
+
                     <button className={`icon-btn ${isMarkingMode ? 'active' : ''}`} onClick={() => { if (!isMarkingMode && isPlaying) togglePlay(); setIsMarkingMode(!isMarkingMode); }} title="Mark Skip Area">
                         <Icons.Crop />
                         <span style={{fontSize:'12px', marginLeft:'5px'}}>{isMarkingMode ? "Done" : "Skip Area"}</span>
