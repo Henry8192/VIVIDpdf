@@ -148,6 +148,7 @@ const App = () => {
 
   const loadFromBlob = async (blob) => {
     try {
+        if (blob.name) { document.title = blob.name;}
         const data = await blob.arrayBuffer();
         const loadingTask = pdfjsLib.getDocument({ data });
         const pdfDoc = await loadingTask.promise;
