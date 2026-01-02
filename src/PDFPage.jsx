@@ -74,7 +74,6 @@ const PDFPage = ({
   // --- Rendering Logic ---
   useEffect(() => {
     if (!isVisible || !pdfDoc) return;
-
     let isCancelled = false;
 
     const render = async () => {
@@ -92,7 +91,6 @@ const PDFPage = ({
         });
 
         setPageDimensions({ width: viewport.width, height: viewport.height });
-
         if (containerRef.current) containerRef.current.style.setProperty('--scale-factor', scale);
 
         // Render Canvas
@@ -102,7 +100,6 @@ const PDFPage = ({
             canvasRef.current.height = renderViewport.height;
             canvasRef.current.style.width = `${viewport.width}px`;
             canvasRef.current.style.height = `${viewport.height}px`;
-            
             await page.render({ canvasContext: ctx, viewport: renderViewport }).promise;
         }
 
@@ -131,7 +128,6 @@ const PDFPage = ({
                 if (!text.trim()) return; 
 
                 const containerRect = containerRef.current.getBoundingClientRect();
-                
                 const regex = /\S+/g;
                 let match;
                 while ((match = regex.exec(text)) !== null) {
@@ -164,9 +160,9 @@ const PDFPage = ({
                 // We rely on the DOM order provided by PDF.js, which usually respects 
                 // the logical reading order (columns, forms, etc.).
                 // We only merge if items are sequential in the DOM AND physically touching.
-
-                let currentToken = rawTokens[0];
-                currentToken.parts = [rawTokens[0]]; 
+                // CLONE the first token to start a merged token. 
+                // We MUST clone so we don't mutate rawTokens[0].bounds, ensuring parts[0] stays accurate.
+                let currentToken = { ...rawTokens[0], parts: [rawTokens[0]] };
 
                 for (let i = 1; i < rawTokens.length; i++) {
                     const nextToken = rawTokens[i];
@@ -179,17 +175,21 @@ const PDFPage = ({
                     
                     // Check 2: Horizontal Proximity (Touching?)
                     const gap = nextBounds.left - prevBounds.right;
-                    
-                    const isGapSmallEnough = gap < (prevBounds.height * MERGE_CONFIG.MAX_INTRA_WORD_GAP);
-                    const isOverlapAcceptable = gap > -(prevBounds.height * MERGE_CONFIG.MAX_ALLOWED_OVERLAP);
-                    
-                    const isTouching = isGapSmallEnough && isOverlapAcceptable;
+                    const isTouching = gap < (prevBounds.height * MERGE_CONFIG.MAX_INTRA_WORD_GAP) && 
+                                       gap > -(prevBounds.height * MERGE_CONFIG.MAX_ALLOWED_OVERLAP);
 
-                    if (isSameLine && isTouching) {
+                    const isHyphenated = /[—\-\u00AD]$/.test(currentToken.text); 
+                    const isLineBreakSplit = isHyphenated && !isSameLine;
+
+                    if ((isSameLine && isTouching) || isLineBreakSplit) {
                         // MERGE
-                        currentToken.text += nextToken.text;
-                        
-                        // Union Bounds
+                        if (isLineBreakSplit) {
+                            currentToken.text = currentToken.text.slice(0, -1) + nextToken.text;
+                        } else {
+                            currentToken.text += nextToken.text;
+                        }
+
+                        // Union Bounds (Global union, useful for click detection, but not highlighting)
                         const newLeft = Math.min(prevBounds.left, nextBounds.left);
                         const newTop = Math.min(prevBounds.top, nextBounds.top);
                         const newRight = Math.max(prevBounds.right, nextBounds.right);
@@ -205,16 +205,16 @@ const PDFPage = ({
                         };
                         currentToken.parts.push(nextToken);
                     } else {
-                        // PUSH & RESET
+                        // NEW TOKEN
                         mergedTokens.push(currentToken);
-                        currentToken = nextToken;
-                        currentToken.parts = [nextToken];
+                        // Clone next token to start new current
+                        currentToken = { ...nextToken, parts: [nextToken] };
                     }
                 }
                 mergedTokens.push(currentToken);
             }
 
-            // 3. Finalize & Register
+            // 3. Finalize
             let finalTokens = [];
             spanMapRef.current.clear(); 
 
@@ -224,8 +224,8 @@ const PDFPage = ({
                     pageNum,
                     text: t.text,
                     spokenText: t.text,
-                    bounds: t.bounds,
-                    parts: t.parts
+                    bounds: t.bounds, // The union bounds (for hit detection)
+                    parts: t.parts    // The individual parts (for precise highlighting)
                 };
 
                 const isSkipped = skipZones.some(zone => {
@@ -299,7 +299,6 @@ const PDFPage = ({
   const handleMouseUp = () => {
     if (!isDrawing) return;
     setIsDrawing(false);
-    
     if (currentRect && currentRect.w > 5 && currentRect.h > 5 && pageDimensions) {
         const normZone = {
             id: Date.now(),
@@ -324,13 +323,11 @@ const PDFPage = ({
       range.setStart(pos.offsetNode, pos.offset);
       range.setEnd(pos.offsetNode, pos.offset);
     }
-    
     if (!range || range.startContainer.nodeType !== Node.TEXT_NODE) return null;
 
     const targetSpan = range.startContainer.parentElement;
     const candidates = spanMapRef.current.get(targetSpan);
     if (!candidates) return null;
-    
     if (candidates.length === 1) return candidates[0];
 
     const rect = containerRef.current.getBoundingClientRect();
@@ -366,16 +363,49 @@ const PDFPage = ({
     }
   };
 
-  // --- Style Calculations ---
-  const getHighlightStyle = useCallback((tokenId) => {
-    if (!tokenId || !pageTokensRef.current.length) return null;
+  // --- Multi-Rect Calculation ---
+  // Returns an array of rectangles to highlight, handling line breaks gracefully.
+  const getHighlightRects = useCallback((tokenId) => {
+    if (!tokenId || !pageTokensRef.current.length) return [];
     const token = pageTokensRef.current.find(t => t.id === tokenId);
-    if (!token || !token.bounds) return null;
-    return token.bounds; 
+    if (!token || !token.parts || token.parts.length === 0) return [];
+
+    // Group parts by line
+    const rects = [];
+    let currentRect = { ...token.parts[0].bounds }; 
+
+    for (let i = 1; i < token.parts.length; i++) {
+        const partBounds = token.parts[i].bounds;
+        
+        // Are they on the same line?
+        const isSameLine = Math.abs(currentRect.top - partBounds.top) < 
+                           (currentRect.height * MERGE_CONFIG.MAX_VERTICAL_MISALIGNMENT);
+
+        if (isSameLine) {
+            // Merge into current rect
+            const newLeft = Math.min(currentRect.left, partBounds.left);
+            const newTop = Math.min(currentRect.top, partBounds.top);
+            const newRight = Math.max(currentRect.left + currentRect.width, partBounds.left + partBounds.width);
+            const newBottom = Math.max(currentRect.top + currentRect.height, partBounds.top + partBounds.height);
+            
+            currentRect = {
+                left: newLeft,
+                top: newTop,
+                width: newRight - newLeft,
+                height: newBottom - newTop
+            };
+        } else {
+            // Push current and start new
+            rects.push(currentRect);
+            currentRect = { ...partBounds };
+        }
+    }
+    rects.push(currentRect);
+    return rects;
   }, []);
 
-  const activeStyle = useMemo(() => getHighlightStyle(activeTokenId), [activeTokenId, getHighlightStyle]);
-  const hoverStyle = useMemo(() => getHighlightStyle(hoveredTokenId), [hoveredTokenId, getHighlightStyle]);
+  const activeRects = useMemo(() => getHighlightRects(activeTokenId), [activeTokenId, getHighlightRects]);
+  const hoverRects = useMemo(() => getHighlightRects(hoveredTokenId), [hoveredTokenId, getHighlightRects]);
 
   return (
     <div 
@@ -405,8 +435,14 @@ const PDFPage = ({
                 onMouseLeave={() => setHoveredTokenId(null)}
                 style={{ pointerEvents: isMarkingMode ? 'none' : 'auto' }}
             />
-            {activeStyle && !isMarkingMode && <div className="highlight-box" style={activeStyle} />}
-            {hoverStyle && !isMarkingMode && <div className="hover-box" style={hoverStyle} />}
+            
+            {/* Render Multi-Part Highlights */}
+            {activeRects.map((style, i) => (
+                !isMarkingMode && <div key={`active-${i}`} className="highlight-box" style={style} />
+            ))}
+            {hoverRects.map((style, i) => (
+                !isMarkingMode && <div key={`hover-${i}`} className="hover-box" style={style} />
+            ))}
 
             {pageDimensions && skipZones.map(zone => (
                 <div 
