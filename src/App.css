@@ -333,3 +333,17 @@ input[type="range"] {
     background: #3f3f46;
     border-radius: 4px;
 }
+
+.icon-btn-small {
+    background: none;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    width: 24px;
+    height: 24px;
+}
+.icon-btn-small:hover {
+    background-color: rgba(0,0,0,0.1);
+}
