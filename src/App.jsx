@@ -10,6 +10,7 @@ const App = () => {
   const [pdf, setPdf] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [rate, setRate] = useState(1.0);
+  const [isDragging, setIsDragging] = useState(false); // New Drag State
   
   // Navigation State
   const [numPages, setNumPages] = useState(0);
@@ -79,27 +80,65 @@ const App = () => {
     }
   }, []);
 
-  const onFileChange = async (e) => {
+  // Shared file loader
+  const loadFromBlob = async (blob) => {
+    try {
+        const data = await blob.arrayBuffer();
+        const loadingTask = pdfjsLib.getDocument({ data });
+        const pdfDoc = await loadingTask.promise;
+        
+        setPdf(pdfDoc);
+        setNumPages(pdfDoc.numPages);
+        setActivePage(1);
+        setJumpInput("1");
+        
+        setCurrentTokens([]);
+        setActiveTokenId(null);
+        setIsPlaying(false);
+        pageTokensMap.current.clear();
+        waitingForPageRef.current = null;
+        
+        setSkipZones([]);
+        synth.cancel();
+    } catch (error) {
+        console.error("Error loading PDF:", error);
+        alert("Failed to load PDF. Please ensure it is a valid file.");
+    }
+  };
+
+  const onFileChange = (e) => {
     const file = e.target.files[0];
-    if (!file) return;
-    const data = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({ data });
-    const pdfDoc = await loadingTask.promise;
-    
-    setPdf(pdfDoc);
-    setNumPages(pdfDoc.numPages);
-    setActivePage(1);
-    setJumpInput("1");
-    
-    setCurrentTokens([]);
-    setActiveTokenId(null);
-    setIsPlaying(false);
-    pageTokensMap.current.clear();
-    waitingForPageRef.current = null;
-    
-    // Clear old skip zones on new file
-    setSkipZones([]);
-    synth.cancel();
+    if (file) loadFromBlob(file);
+  };
+
+  // Drag and Drop Handlers
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDragging) setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Only set false if leaving the main window, not just entering a child element
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+        if (files[0].type === "application/pdf") {
+            loadFromBlob(files[0]);
+        } else {
+            alert("Please drop a valid PDF file.");
+        }
+    }
   };
 
   const registerPageRef = (num, el) => { pageRefs.current[num] = el; };
@@ -214,7 +253,7 @@ const App = () => {
   };
 
   const togglePlay = () => {
-    if (isMarkingMode) return; // Disable play toggle during marking
+    if (isMarkingMode) return;
     if (isPlaying) {
         setIsPlaying(false);
         isPlayingRef.current = false;
@@ -229,7 +268,33 @@ const App = () => {
   };
 
   return (
-    <div className="app-layout">
+    <div 
+        className="app-layout"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+    >
+      {/* Visual Feedback Overlay */}
+      {isDragging && (
+        <div style={{
+            position: 'absolute',
+            top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.7)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'white',
+            fontSize: '24px',
+            pointerEvents: 'none' // Let events pass through to parent
+        }}>
+            <div>
+                <Icons.Upload style={{width: 64, height: 64, marginBottom: 20}} />
+                <p>Drop PDF to Open</p>
+            </div>
+        </div>
+      )}
+
       <main className="main-content">
         <div className="scroll-viewport">
             {!pdf ? (
@@ -238,6 +303,9 @@ const App = () => {
                         <Icons.Upload /> Open PDF File
                         <input type="file" accept="application/pdf" onChange={onFileChange} style={{display:'none'}} />
                     </label>
+                    <p style={{marginTop: '20px', color: '#666', fontSize: '14px'}}>
+                        or drag and drop a file here
+                    </p>
                 </div>
             ) : (
                 <div className="pdf-stream">
@@ -252,7 +320,6 @@ const App = () => {
                             registerPageRef={registerPageRef}
                             notifyPageVisible={notifyPageVisible}
                             registerPageTokens={handlePageTokensRegistered}
-                            // Pass Skip Props
                             isMarkingMode={isMarkingMode}
                             skipZones={skipZones}
                             onAddSkipZone={handleAddSkipZone}
@@ -306,7 +373,6 @@ const App = () => {
                 <button 
                     className={`icon-btn ${isMarkingMode ? 'active' : ''}`}
                     onClick={() => {
-                        // Stop playing if entering mark mode
                         if (!isMarkingMode && isPlaying) togglePlay(); 
                         setIsMarkingMode(!isMarkingMode);
                     }}
