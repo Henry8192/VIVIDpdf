@@ -12,41 +12,38 @@ const App = () => {
   const [rate, setRate] = useState(1.0);
   const [isDragging, setIsDragging] = useState(false);
   
-  // Navigation State
+  // Navigation
   const [numPages, setNumPages] = useState(0);
   const [activePage, setActivePage] = useState(1);
   const [jumpInput, setJumpInput] = useState("1");
   const [isInputFocused, setIsInputFocused] = useState(false);
 
-  // Zoom / View / Rotation State
+  // Zoom / View
   const [scale, setScale] = useState(1.5);
-  const [rotation, setRotation] = useState(0); //
+  const [rotation, setRotation] = useState(0);
   const [zoomInput, setZoomInput] = useState("150"); 
   const [fitMode, setFitMode] = useState('custom'); 
 
   // TTS State
   const [voices, setVoices] = useState([]);
   const [selectedVoiceURI, setSelectedVoiceURI] = useState("");
-  const [currentTokens, setCurrentTokens] = useState([]);
   const [activeTokenId, setActiveTokenId] = useState(null);
 
-  // Skip State
+  // Skip / Zones
   const [isMarkingMode, setIsMarkingMode] = useState(false);
   const [skipZones, setSkipZones] = useState([]);
 
   // Refs
   const isPlayingRef = useRef(false); 
   const rateRef = useRef(1.0);
-  const audioMapRef = useRef([]); 
-  const isSwitchingRef = useRef(false);
   const synth = window.speechSynthesis;
   const pageRefs = useRef({}); 
   const viewportRef = useRef(null); 
   
   const pageTokensMap = useRef(new Map());
   const waitingForPageRef = useRef(null);
-
-  // Visual State
+  
+  // Visual
   const [isLoading, setIsLoading] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
 
@@ -76,7 +73,7 @@ const App = () => {
     return () => { window.speechSynthesis.onvoiceschanged = null; };
   }, [selectedVoiceURI]);
 
-  // --- Zoom & Rotation Handlers ---
+  // --- Zoom & Rotation ---
   const updateScale = (newScale) => {
       const clamped = Math.min(Math.max(newScale, 0.5), 5.0); 
       setScale(clamped);
@@ -106,9 +103,7 @@ const App = () => {
     if (!pdf || !viewportRef.current) return;
     try {
         const page = await pdf.getPage(activePage);
-        // We must consider rotation when calculating fit
         const unscaledViewport = page.getViewport({ scale: 1.0, rotation: (page.rotate + rotation) % 360 });
-        
         const containerWidth = viewportRef.current.clientWidth;
         const containerHeight = viewportRef.current.clientHeight;
         const pad = 40; 
@@ -127,7 +122,7 @@ const App = () => {
     }
   };
 
-  // --- Existing Logic ---
+  // --- Core Logic ---
   const handleAddSkipZone = useCallback((zone) => {
       setSkipZones(prev => [...prev, zone]);
   }, []);
@@ -138,9 +133,41 @@ const App = () => {
 
   const handlePageTokensRegistered = useCallback((pageNum, tokens) => {
     pageTokensMap.current.set(pageNum, tokens);
+
+    // --- FIX: Cross-Page Hyphenation Merge ---
+    const tryMergeNeighbors = (p1, p2) => {
+        const t1 = pageTokensMap.current.get(p1);
+        const t2 = pageTokensMap.current.get(p2);
+        if (!t1 || !t2 || t1.length === 0 || t2.length === 0) return;
+
+        const last = t1[t1.length - 1];
+        const first = t2[0];
+
+        // If already linked, skip
+        if (first.linkedTo === last.id) return;
+
+        // Check for hyphen at end of previous page
+        if (/[-\u2010\u2011\u00AD]$/.test(last.text)) {
+            // Remove hyphen from spoken text and append next word
+            const cleanPrefix = last.text.replace(/[-\u2010\u2011\u00AD]$/, '');
+            last.spokenText = cleanPrefix + first.text;
+            
+            // Silence the second part so it doesn't trigger a separate read
+            first.spokenText = "";
+            
+            // Link them for highlighting: when 'last' is active, 'first' should also highlight
+            first.linkedTo = last.id;
+        }
+    };
+
+    // Check boundary with previous page
+    tryMergeNeighbors(pageNum - 1, pageNum);
+    // Check boundary with next page
+    tryMergeNeighbors(pageNum, pageNum + 1);
+
     if (waitingForPageRef.current === pageNum && isPlayingRef.current) {
         waitingForPageRef.current = null;
-        speakFromToken(null, tokens, pageNum);
+        scheduleNextBatch(pageNum, []);
     }
   }, []);
 
@@ -158,10 +185,9 @@ const App = () => {
         setJumpInput("1");
         
         setScale(1.5);
-        setRotation(0); // Reset rotation on new file
+        setRotation(0);
         setFitMode('custom');
 
-        setCurrentTokens([]);
         setActiveTokenId(null);
         setIsPlaying(false);
         pageTokensMap.current.clear();
@@ -218,70 +244,155 @@ const App = () => {
   };
 
   const handleTokenClick = useCallback((pageTokens, clickedTokenId, pageNum) => {
-      setCurrentTokens(pageTokens);
-      isSwitchingRef.current = true;
       synth.cancel();
       setIsPlaying(true);
       isPlayingRef.current = true;
       waitingForPageRef.current = null;
-      speakFromToken(clickedTokenId, pageTokens, pageNum);
-      setTimeout(() => { isSwitchingRef.current = false; }, 200);
+      
+      let startIndex = 0;
+      if (clickedTokenId) {
+          startIndex = pageTokens.findIndex(t => t.id === clickedTokenId);
+          if (startIndex === -1) startIndex = 0;
+      }
+      const tokensToPlay = pageTokens.slice(startIndex);
+      
+      scheduleNextBatch(pageNum, tokensToPlay, true);
   }, [voices, selectedVoiceURI, rate]);
 
-  const speakFromToken = (startTokenId, tokensToRead, pageNum) => {
+  // --- TTS Engine ---
+
+  const scheduleNextBatch = (startPageNum, carryOverTokens, isFirstBatch = false) => {
     if (!isPlayingRef.current) return;
-    setCurrentTokens(tokensToRead); 
+
+    let pool = [...carryOverTokens];
+    
+    if (pool.length === 0) {
+        const pageTokens = pageTokensMap.current.get(startPageNum);
+        if (!pageTokens) {
+            waitingForPageRef.current = startPageNum;
+            setActivePage(startPageNum);
+             if (pageRefs.current[startPageNum]) {
+                pageRefs.current[startPageNum].scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+            return;
+        }
+        pool = [...pageTokens];
+    }
+
+    const nextPageNum = startPageNum + 1;
+    const nextPageTokens = pageTokensMap.current.get(nextPageNum);
+    let hasNextPage = false;
+
+    if (nextPageTokens && nextPageTokens.length > 0) {
+        pool = [...pool, ...nextPageTokens];
+        hasNextPage = true;
+    }
+
+    let endIndex = pool.length;
+    let nextLeftovers = [];
+    
+    if (hasNextPage) {
+        let safetyFound = false;
+        for (let i = pool.length - 1; i > 0; i--) {
+             const txt = pool[i].spokenText.trim();
+             // Skip empty texts (silenced hyphen parts) when checking for punctuation
+             if (!txt) continue;
+
+             if (/[.!?]["']?$/.test(txt)) {
+                 endIndex = i + 1;
+                 safetyFound = true;
+                 break;
+             }
+        }
+        if (safetyFound && endIndex < pool.length) {
+            nextLeftovers = pool.slice(endIndex);
+            pool = pool.slice(0, endIndex);
+        }
+    }
+
     let script = "";
-    const map = []; 
-    let startIndexInArray = 0;
-    if (startTokenId) {
-        startIndexInArray = tokensToRead.findIndex(t => t.id === startTokenId);
-        if (startIndexInArray === -1) startIndexInArray = 0;
-    }
-    for (let i = startIndexInArray; i < tokensToRead.length; i++) {
-        const token = tokensToRead[i];
-        if (!token) continue;
+    const map = [];
+    pool.forEach(token => {
+        const text = token.spokenText;
+        if (!text) return; // Skip silent tokens (merged parts) in script
+
         const start = script.length;
-        const textToRead = token.spokenText;
-        const end = start + textToRead.length;
+        script += text + " ";
+        const end = start + text.length;
         map.push({ start, end, token });
-        script += textToRead + " "; 
+    });
+
+    if (!script.trim()) {
+        if (startPageNum < numPages) {
+            scheduleNextBatch(nextPageNum, []);
+        } else {
+            setIsPlaying(false);
+        }
+        return;
     }
-    audioMapRef.current = map;
-    if (!script.trim()) { handlePageEnd(pageNum); return; }
 
     const utter = new SpeechSynthesisUtterance(script);
     utter.rate = rateRef.current;
     const targetVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
     if (targetVoice) { utter.voice = targetVoice; utter.lang = targetVoice.lang; }
+    
+    utter.audioMap = map;
+    utter.nextBatchInfo = {
+        pageNum: hasNextPage ? nextPageNum : startPageNum + 1,
+        leftovers: nextLeftovers
+    };
+    utter.hasQueuedNext = false; 
+
     utter.onboundary = (event) => {
         if (!isPlayingRef.current) { synth.cancel(); return; }
-        const currentIdx = event.charIndex;
-        const entry = audioMapRef.current.find(m => currentIdx >= m.start && currentIdx < m.end);
-        if (entry) setActiveTokenId(entry.token.id);
-    };
-    utter.onend = () => {
-        if (isSwitchingRef.current || !isPlayingRef.current) return;
-        handlePageEnd(pageNum);
-    };
-    utter.onerror = () => setIsPlaying(false);
-    synth.speak(utter);
-  };
+        
+        const currentMap = event.target.audioMap;
+        if (!currentMap) return;
 
-  const handlePageEnd = (finishedPageNum) => {
-      if (finishedPageNum < numPages) {
-          const nextPage = finishedPageNum + 1;
-          setActivePage(nextPage);
-          if (pageRefs.current[nextPage]) {
-              pageRefs.current[nextPage].scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }
-          const nextTokens = pageTokensMap.current.get(nextPage);
-          if (nextTokens) speakFromToken(null, nextTokens, nextPage);
-          else waitingForPageRef.current = nextPage;
-      } else {
-          setIsPlaying(false);
-          setActiveTokenId(null);
-      }
+        const currentIdx = event.charIndex;
+        const entry = currentMap.find(m => currentIdx >= m.start && currentIdx < m.end);
+        
+        if (entry) {
+            setActiveTokenId(entry.token.id);
+            if (entry.token.pageNum !== activePage) {
+                setActivePage(entry.token.pageNum);
+                if (pageRefs.current[entry.token.pageNum]) {
+                    pageRefs.current[entry.token.pageNum].scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }
+        }
+    };
+
+    utter.onstart = (event) => {
+        if (!isPlayingRef.current) return;
+        const info = event.target.nextBatchInfo;
+        
+        if (info && !event.target.hasQueuedNext && info.pageNum <= numPages) {
+             if (info.leftovers.length > 0 || pageTokensMap.current.has(info.pageNum)) {
+                 event.target.hasQueuedNext = true;
+                 scheduleNextBatch(info.pageNum, info.leftovers);
+             }
+        }
+    };
+
+    utter.onend = (event) => {
+        if (!isPlayingRef.current) return;
+        if (!event.target.hasQueuedNext) {
+            const info = event.target.nextBatchInfo;
+            if (info && info.pageNum <= numPages) {
+                 scheduleNextBatch(info.pageNum, info.leftovers);
+            } else {
+                setIsPlaying(false);
+                setActiveTokenId(null);
+            }
+        }
+    };
+
+    utter.onerror = () => {
+        if (isPlayingRef.current) setIsPlaying(false);
+    };
+
+    synth.speak(utter);
   };
 
   const togglePlay = () => {
@@ -294,8 +405,16 @@ const App = () => {
     } else {
         setIsPlaying(true);
         isPlayingRef.current = true;
-        const tokens = pageTokensMap.current.get(activePage) || currentTokens;
-        speakFromToken(activeTokenId || (tokens[0] ? tokens[0].id : undefined), tokens, activePage); 
+        const tokens = pageTokensMap.current.get(activePage) || [];
+        let startTokens = [];
+        if (activeTokenId && tokens.length > 0) {
+            const idx = tokens.findIndex(t => t.id === activeTokenId);
+            startTokens = idx >= 0 ? tokens.slice(idx) : tokens;
+        } else {
+            startTokens = tokens;
+        }
+        
+        scheduleNextBatch(activePage, startTokens, true); 
     }
   };
 
@@ -331,7 +450,7 @@ const App = () => {
                             pdfDoc={pdf}
                             pageNum={pageNum}
                             scale={scale}
-                            rotation={rotation} // Pass rotation prop
+                            rotation={rotation}
                             activeTokenId={activeTokenId}
                             onTokensParsed={handleTokenClick}
                             registerPageRef={registerPageRef}
@@ -404,9 +523,8 @@ const App = () => {
                            {fitMode === 'width' ? 'Fit W' : fitMode === 'height' ? 'Fit H' : 'Fit'}
                         </button>
 
-                        <div style={{width: '1px', height: '16px', background: '#ccc', margin: '0 8px'}}></div>
+                         <div style={{width: '1px', height: '16px', background: '#ccc', margin: '0 8px'}}></div>
 
-                         {/* NEW ROTATE BUTTON */}
                         <button onClick={handleRotate} title="Rotate 90°" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '16px', fontWeight: '600', color: '#444' }}>
                             <Icons.Rotate style={{ fontSize: '20px' }} />
                         </button>
