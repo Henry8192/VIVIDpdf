@@ -8,7 +8,7 @@ const MERGE_CONFIG = {
   MAX_INTRA_WORD_GAP: 0.1, 
   MAX_ALLOWED_OVERLAP: 0.5,
   // New: Sentence heuristics
-  SENTENCE_GAP_THRESHOLD: 2 // Multiplier of height to detect paragraph breaks
+  SENTENCE_GAP_THRESHOLD: 1.5// Multiplier of height to detect paragraph breaks
 };
 
 const isTokenInZone = (tokenRect, zoneRect) => {
@@ -35,7 +35,7 @@ const groupTokensIntoSentences = (tokens) => {
 
     // Handle End of Input
     if (isLast) {
-      console.log(`Sentence: "${currentSentence.map(t => t.spokenText).join(' ')}" | Reason: End of Input`);
+      // console.log(`Sentence: "${currentSentence.map(t => t.spokenText).join(' ')}" | Reason: End of Input`);
       sentences.push(currentSentence);
       break;
     }
@@ -46,29 +46,32 @@ const groupTokensIntoSentences = (tokens) => {
     const hasPunctuation = /[.!?]["']?$/.test(t.spokenText.trim());
     
     const verticalGap = nextT.bounds.top - t.bounds.bottom;
-    const isNewParagraph = Math.abs(verticalGap) > (Math.min(nextT.bounds.height,t.bounds.height) * MERGE_CONFIG.SENTENCE_GAP_THRESHOLD);
+    const isNewParagraph = Math.abs(verticalGap) > ((nextT.bounds.height+t.bounds.height)/2 * MERGE_CONFIG.SENTENCE_GAP_THRESHOLD);
 
+    const isPossiblyNewParagraph = Math.abs(verticalGap) > (Math.max(nextT.bounds.height+t.bounds.height) * MERGE_CONFIG.SENTENCE_GAP_THRESHOLD);
+
+    // CHANGE: Compare specific font names (internal identifiers) instead of generic CSS families
     const isFontChange = (t.fontInfo && nextT.fontInfo) && 
-                         (t.fontInfo.family !== nextT.fontInfo.family || 
-                          Math.abs(t.fontInfo.size - nextT.fontInfo.size) > 1);
+                         (t.fontInfo.name !== nextT.fontInfo.name || Math.abs(t.fontInfo.size - nextT.fontInfo.size) > 1);
+    const isBigFontChange = (t.fontInfo && nextT.fontInfo) && ((Math.abs(t.fontInfo.size - nextT.fontInfo.size) > 10) || (t.fontInfo.name !== nextT.fontInfo.name && Math.abs(t.fontInfo.size - nextT.fontInfo.size) > 4));
 
     // Determine Active Triggers
     const activeTriggers = [];
     if (hasPunctuation) activeTriggers.push('Punctuation');
-    if (isNewParagraph) activeTriggers.push('New Paragraph ');
-    if (isFontChange) activeTriggers.push('Font Change');
-
+    if (isNewParagraph&&isFontChange) activeTriggers.push('New Paragraph &&Font Change');
+    if (isBigFontChange&&isPossiblyNewParagraph) activeTriggers.push('big font change');
     // Decision: Split if triggered
     if (activeTriggers.length > 0) {
-      console.log(`Sentence: "${currentSentence.map(t => t.spokenText).join(' ')}" | Reason: ${activeTriggers.join(', ')}`);
-      console.log(verticalGap , nextT.bounds.top ,t.bounds.bottom,(t.bounds.height * MERGE_CONFIG.SENTENCE_GAP_THRESHOLD));
-      console.log(t.fontInfo.family ,nextT.fontInfo.family);
+      // console.log(`Sentence: "${currentSentence.map(t => t.spokenText).join(' ')}" | Reason: ${activeTriggers.join(', ')}`);
+      // console.log(t.fontInfo.name, nextT.fontInfo.name, t.fontInfo.size, nextT.fontInfo.size);
+      // console.log(Math.abs(verticalGap) , ((nextT.bounds.height+t.bounds.height)/2));
       sentences.push(currentSentence);
       currentSentence = [];
     }
   }
   return sentences;
 };
+
 const PDFPage = forwardRef(({ 
   pdfDoc, 
   pageNum, 
@@ -97,6 +100,7 @@ const PDFPage = forwardRef(({
   const textLayerRef = useRef(null);
   const pageTokensRef = useRef([]);
   const spanMapRef = useRef(new Map());
+  const sentenceGroupsRef = useRef([]);
 
   // --- Scroll Visibility Observer ---
   useEffect(() => {
@@ -261,7 +265,9 @@ const PDFPage = forwardRef(({
             textLayerRef.current.style.width = `${viewport.width}px`;
             textLayerRef.current.style.height = `${viewport.height}px`;
 
+            // CHANGE: Retrieve textContent to access raw items
             const textContent = await page.getTextContent();
+            
             await pdfjsLib.renderTextLayer({
                 textContent,
                 container: textLayerRef.current,
@@ -273,13 +279,16 @@ const PDFPage = forwardRef(({
             let rawTokens = [];
             
             // Extraction Pass
-            spans.forEach(span => {
+            spans.forEach((span, i) => {
                 const text = span.textContent;
                 if (!text.trim()) return; 
 
-                // Heuristic: Capture Font Info from computed style
+                // CHANGE: Access specific font name from PDF.js items (fallback to computed if desync)
+                const item = textContent.items[i];
                 const computed = window.getComputedStyle(span);
+                
                 const fontInfo = {
+                    name: item?.fontName || computed.fontFamily, // Use raw ID e.g. 'g_d0_f1'
                     family: computed.fontFamily,
                     size: parseFloat(computed.fontSize) || 12
                 };
@@ -296,7 +305,7 @@ const PDFPage = forwardRef(({
                     rawTokens.push({
                         text: match[0],
                         spanElement: span,
-                        fontInfo, // Store for logic
+                        fontInfo, 
                         startOffset: match.index,
                         endOffset: regex.lastIndex,
                         bounds: {
@@ -404,6 +413,13 @@ const PDFPage = forwardRef(({
             });
 
             pageTokensRef.current = finalTokens;
+            // Pre-calculate sentences only once when tokens are generated
+            if (readingMode === 'sentence') { 
+                sentenceGroupsRef.current = groupTokensIntoSentences(finalTokens);
+            } else {
+                // Optional: lazy load it later or compute it regardless
+                sentenceGroupsRef.current = groupTokensIntoSentences(finalTokens); 
+            }
             registerPageTokens(pageNum, finalTokens);
         }
       } catch (err) {
@@ -489,22 +505,26 @@ const PDFPage = forwardRef(({
   // Find the sentence containing a specific token ID
   const getSentenceTokens = useCallback((targetTokenId) => {
       if (!targetTokenId) return [];
-      const tokens = pageTokensRef.current;
-      const targetIndex = tokens.findIndex(t => t.id === targetTokenId || t.linkedTo === targetTokenId);
-      if (targetIndex === -1) return [];
 
-      // We need to run the grouping logic to find the range.
-      // Optimization: We could cache sentences, but recalculating on click/hover is fast enough for single pages.
-      const sentences = groupTokensIntoSentences(tokens);
+      // 1. Try to use the cached sentence groups first
+      const cachedSentences = sentenceGroupsRef.current;
       
-      for (const sent of sentences) {
-          if (sent.some(t => t.id === targetTokenId || t.linkedTo === targetTokenId)) {
-              return sent;
+      if (cachedSentences && cachedSentences.length > 0) {
+          for (const sent of cachedSentences) {
+              // Check if the target token (or its link) exists in this sentence group
+              if (sent.some(t => t.id === targetTokenId || t.linkedTo === targetTokenId)) {
+                  return sent;
+              }
           }
       }
-      return [tokens[targetIndex]];
-  }, []);
 
+      // 2. Fallback: If cache is empty or token not found, return the single token
+      // This prevents crashing if the cache hasn't populated yet
+      const tokens = pageTokensRef.current;
+      const foundToken = tokens.find(t => t.id === targetTokenId);
+      
+      return foundToken ? [foundToken] : [];
+  }, []);
   const handlePageClick = (e) => {
     if (isMarkingMode) return;
     const clickedToken = getTokenFromEvent(e);
