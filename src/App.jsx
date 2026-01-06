@@ -17,6 +17,11 @@ const App = () => {
   // New: Reading Mode State
   const [readingMode, setReadingMode] = useState('sentence'); // 'word' | 'sentence'
 
+  // New: Highlight Settings
+  const [highlightEnabled, setHighlightEnabled] = useState(true);
+  const [highlightColor, setHighlightColor] = useState('#ffeb3b'); // Default Yellow
+  const [highlightOpacity, setHighlightOpacity] = useState(0.4);
+
   // Navigation
   const [numPages, setNumPages] = useState(0);
   const [activePage, setActivePage] = useState(1);
@@ -485,6 +490,9 @@ const App = () => {
                                 skipZones={skipZones}
                                 onAddSkipZone={handleAddSkipZone}
                                 onRemoveSkipZone={handleRemoveSkipZone}
+                                highlightEnabled={highlightEnabled}
+                                highlightColor={highlightColor}
+                                highlightOpacity={highlightOpacity}
                             />
                         ))}
                     </div>
@@ -637,6 +645,45 @@ const App = () => {
                                             <span>0.5x</span>
                                             <span>3.0x</span>
                                         </div>
+                                    </div>
+
+                                    <div className="setting-divider"></div>
+
+                                    {/* HIGHLIGHT SETTINGS */}
+                                    <div className="setting-item">
+                                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px'}}>
+                                            <label>Highlighting</label>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={highlightEnabled} 
+                                                onChange={e => setHighlightEnabled(e.target.checked)} 
+                                                style={{ width: 'auto' }}
+                                            />
+                                        </div>
+                                        
+                                        {highlightEnabled && (
+                                            <>
+                                                <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px'}}>
+                                                    <label style={{fontSize: '13px', color: '#555'}}>Color</label>
+                                                    <input 
+                                                        type="color" 
+                                                        value={highlightColor} 
+                                                        onChange={e => setHighlightColor(e.target.value)}
+                                                        style={{ width: '40px', height: '25px', padding: 0, border: 'none' }}
+                                                    />
+                                                </div>
+                                                <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
+                                                    <label style={{fontSize: '13px', color: '#555'}}>Opacity</label>
+                                                    <input 
+                                                        type="range" 
+                                                        min="0.1" max="1.0" step="0.1" 
+                                                        value={highlightOpacity}
+                                                        onChange={e => setHighlightOpacity(Number(e.target.value))}
+                                                        style={{ width: '80px' }}
+                                                    />
+                                                </div>
+                                            </>
+                                        )}
                                     </div>
                                     
                                     <div className="setting-divider"></div>

@@ -7,8 +7,7 @@ const MERGE_CONFIG = {
   MAX_VERTICAL_MISALIGNMENT: 0.5, 
   MAX_INTRA_WORD_GAP: 0.1, 
   MAX_ALLOWED_OVERLAP: 0.5,
-  // New: Sentence heuristics
-  SENTENCE_GAP_THRESHOLD: 1.5// Multiplier of height to detect paragraph breaks
+  SENTENCE_GAP_THRESHOLD: 1.5
 };
 
 const isTokenInZone = (tokenRect, zoneRect) => {
@@ -21,7 +20,6 @@ const isTokenInZone = (tokenRect, zoneRect) => {
 };
 
 // --- Sentence Boundary Logic ---
-// Returns an array of arrays: [ [token, token], [token... ] ]
 const groupTokensIntoSentences = (tokens) => {
   if (!tokens || tokens.length === 0) return [];
   const sentences = [];
@@ -33,9 +31,7 @@ const groupTokensIntoSentences = (tokens) => {
 
     const isLast = i === tokens.length - 1;
 
-    // Handle End of Input
     if (isLast) {
-      // console.log(`Sentence: "${currentSentence.map(t => t.spokenText).join(' ')}" | Reason: End of Input`);
       sentences.push(currentSentence);
       break;
     }
@@ -50,21 +46,16 @@ const groupTokensIntoSentences = (tokens) => {
 
     const isPossiblyNewParagraph = Math.abs(verticalGap) > (Math.max(nextT.bounds.height+t.bounds.height) * MERGE_CONFIG.SENTENCE_GAP_THRESHOLD);
 
-    // CHANGE: Compare specific font names (internal identifiers) instead of generic CSS families
     const isFontChange = (t.fontInfo && nextT.fontInfo) && 
                          (t.fontInfo.name !== nextT.fontInfo.name || Math.abs(t.fontInfo.size - nextT.fontInfo.size) > 1);
     const isBigFontChange = (t.fontInfo && nextT.fontInfo) && ((Math.abs(t.fontInfo.size - nextT.fontInfo.size) > 10) || (t.fontInfo.name !== nextT.fontInfo.name && Math.abs(t.fontInfo.size - nextT.fontInfo.size) > 4));
 
-    // Determine Active Triggers
     const activeTriggers = [];
     if (hasPunctuation) activeTriggers.push('Punctuation');
     if (isNewParagraph&&isFontChange) activeTriggers.push('New Paragraph &&Font Change');
     if (isBigFontChange&&isPossiblyNewParagraph) activeTriggers.push('big font change');
-    // Decision: Split if triggered
+
     if (activeTriggers.length > 0) {
-      // console.log(`Sentence: "${currentSentence.map(t => t.spokenText).join(' ')}" | Reason: ${activeTriggers.join(', ')}`);
-      // console.log(t.fontInfo.name, nextT.fontInfo.name, t.fontInfo.size, nextT.fontInfo.size);
-      // console.log(Math.abs(verticalGap) , ((nextT.bounds.height+t.bounds.height)/2));
       sentences.push(currentSentence);
       currentSentence = [];
     }
@@ -79,13 +70,16 @@ const PDFPage = forwardRef(({
   rotation, 
   onTokensParsed, 
   activeTokenId, 
-  readingMode, // 'word' | 'sentence'
+  readingMode, 
   notifyPageVisible,
   registerPageTokens,
   isMarkingMode,
   skipZones,
   onAddSkipZone,
-  onRemoveSkipZone
+  onRemoveSkipZone,
+  highlightEnabled = true,
+  highlightColor = '#ffeb3b',
+  highlightOpacity = 0.4
 }, ref) => {
   const [isVisible, setIsVisible] = useState(false);
   const [pageDimensions, setPageDimensions] = useState(null); 
@@ -147,14 +141,12 @@ const PDFPage = forwardRef(({
         if (!canvasRef.current || pageTokensRef.current.length === 0) return [];
         
         const tokens = pageTokensRef.current;
-        // Use the new grouping logic
         const sentences = groupTokensIntoSentences(tokens);
 
         const dpr = window.devicePixelRatio || 1;
         const results = [];
 
         for (const sentenceTokens of sentences) {
-            // Calculate Union Bounding Box
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
             
             sentenceTokens.forEach(t => {
@@ -191,7 +183,6 @@ const PDFPage = forwardRef(({
 
             const bgColor = getDominantColor(ctx, width * dpr, height * dpr);
 
-            // Masking
             const maskCanvas = document.createElement('canvas');
             maskCanvas.width = width * dpr;
             maskCanvas.height = height * dpr;
@@ -265,7 +256,6 @@ const PDFPage = forwardRef(({
             textLayerRef.current.style.width = `${viewport.width}px`;
             textLayerRef.current.style.height = `${viewport.height}px`;
 
-            // CHANGE: Retrieve textContent to access raw items
             const textContent = await page.getTextContent();
             
             await pdfjsLib.renderTextLayer({
@@ -278,17 +268,15 @@ const PDFPage = forwardRef(({
             const spans = Array.from(textLayerRef.current.querySelectorAll('span'));
             let rawTokens = [];
             
-            // Extraction Pass
             spans.forEach((span, i) => {
                 const text = span.textContent;
                 if (!text.trim()) return; 
 
-                // CHANGE: Access specific font name from PDF.js items (fallback to computed if desync)
                 const item = textContent.items[i];
                 const computed = window.getComputedStyle(span);
                 
                 const fontInfo = {
-                    name: item?.fontName || computed.fontFamily, // Use raw ID e.g. 'g_d0_f1'
+                    name: item?.fontName || computed.fontFamily, 
                     family: computed.fontFamily,
                     size: parseFloat(computed.fontSize) || 12
                 };
@@ -382,7 +370,7 @@ const PDFPage = forwardRef(({
                     spokenText: t.text,
                     bounds: t.bounds, 
                     parts: t.parts,
-                    fontInfo: t.parts[0].fontInfo // Use first part's font as representative
+                    fontInfo: t.parts[0].fontInfo
                 };
 
                 const isSkipped = skipZones.some(zone => {
@@ -413,11 +401,9 @@ const PDFPage = forwardRef(({
             });
 
             pageTokensRef.current = finalTokens;
-            // Pre-calculate sentences only once when tokens are generated
             if (readingMode === 'sentence') { 
                 sentenceGroupsRef.current = groupTokensIntoSentences(finalTokens);
             } else {
-                // Optional: lazy load it later or compute it regardless
                 sentenceGroupsRef.current = groupTokensIntoSentences(finalTokens); 
             }
             registerPageTokens(pageNum, finalTokens);
@@ -502,38 +488,28 @@ const PDFPage = forwardRef(({
     );
   };
 
-  // Find the sentence containing a specific token ID
   const getSentenceTokens = useCallback((targetTokenId) => {
       if (!targetTokenId) return [];
-
-      // 1. Try to use the cached sentence groups first
       const cachedSentences = sentenceGroupsRef.current;
-      
       if (cachedSentences && cachedSentences.length > 0) {
           for (const sent of cachedSentences) {
-              // Check if the target token (or its link) exists in this sentence group
               if (sent.some(t => t.id === targetTokenId || t.linkedTo === targetTokenId)) {
                   return sent;
               }
           }
       }
-
-      // 2. Fallback: If cache is empty or token not found, return the single token
-      // This prevents crashing if the cache hasn't populated yet
       const tokens = pageTokensRef.current;
       const foundToken = tokens.find(t => t.id === targetTokenId);
-      
       return foundToken ? [foundToken] : [];
   }, []);
+
   const handlePageClick = (e) => {
     if (isMarkingMode) return;
     const clickedToken = getTokenFromEvent(e);
     if (clickedToken) {
         if (readingMode === 'sentence') {
-            // Find start of sentence
             const sentenceTokens = getSentenceTokens(clickedToken.id);
             if (sentenceTokens.length > 0) {
-                // Pass the ID of the first token in the sentence
                 onTokensParsed(pageTokensRef.current, sentenceTokens[0].id, pageNum);
             } else {
                 onTokensParsed(pageTokensRef.current, clickedToken.id, pageNum);
@@ -559,23 +535,17 @@ const PDFPage = forwardRef(({
 
   // --- Multi-Rect Calculation ---
   const getHighlightRects = useCallback((tokenOrId) => {
-    // If Sentence Mode, and input is ID, expand to full sentence
     let targetTokens = [];
-    
-    // Check if we are highlighting a group (sentence mode) or single token
     if (readingMode === 'sentence') {
-         // tokenOrId might be a token object or an ID
          const id = typeof tokenOrId === 'string' ? tokenOrId : tokenOrId.id;
          targetTokens = getSentenceTokens(id);
     } else {
          const t = typeof tokenOrId === 'string' ? pageTokensRef.current.find(x => x.id === tokenOrId) : tokenOrId;
          if (t) targetTokens = [t];
-         // Also include linked hyphenated parts if in word mode
          if (t && t.linkedTo) {
              const linked = pageTokensRef.current.find(x => x.id === t.linkedTo);
              if (linked) targetTokens.push(linked);
          }
-         // Reverse link check
          if (t) {
              const linkedFrom = pageTokensRef.current.find(x => x.linkedTo === t.id);
              if (linkedFrom) targetTokens.push(linkedFrom);
@@ -584,7 +554,6 @@ const PDFPage = forwardRef(({
 
     if (targetTokens.length === 0) return [];
 
-    // Calculate rects for ALL tokens in the target list
     const allRects = [];
     targetTokens.forEach(tok => {
         if (tok.parts) {
@@ -594,11 +563,6 @@ const PDFPage = forwardRef(({
 
     if (allRects.length === 0) return [];
 
-    // Merge overlapping/adjacent rects visually
-    // Simple approach: just return all rects. 
-    // Optimization: Merge variable lines if needed, but standard logic below is fine.
-    
-    // Reuse the previous logic but apply to the list of bounds
     const mergedRects = [];
     let currentRect = { ...allRects[0] };
 
@@ -608,9 +572,6 @@ const PDFPage = forwardRef(({
         const isSameLine = Math.abs(currentRect.top - nextBounds.top) < 
                            (currentRect.height * MERGE_CONFIG.MAX_VERTICAL_MISALIGNMENT);
         
-        // Also check if they are somewhat close horizontally to be part of one highlight block
-        // (For sentences, we want continuous blocks per line)
-
         if (isSameLine) {
              const newLeft = Math.min(currentRect.left, nextBounds.left);
              const newTop = Math.min(currentRect.top, nextBounds.top);
@@ -633,7 +594,6 @@ const PDFPage = forwardRef(({
 
   }, [readingMode, getSentenceTokens]);
 
-  // --- Highlight Logic ---
   const activeRects = useMemo(() => {
       if (!activeTokenId) return [];
       return getHighlightRects(activeTokenId);
@@ -673,11 +633,43 @@ const PDFPage = forwardRef(({
                 style={{ pointerEvents: isMarkingMode ? 'none' : 'auto' }}
             />
             
+            {/* ACTIVE HIGHLIGHT */}
             {activeRects.map((style, i) => (
-                !isMarkingMode && <div key={`active-${i}`} className="highlight-box" style={style} />
+                !isMarkingMode && highlightEnabled && (
+                    <div 
+                        key={`active-${i}`} 
+                        className="highlight-box" 
+                        style={{
+                            ...style, 
+                            backgroundColor: highlightColor,
+                            opacity: highlightOpacity,
+                            // Soft edge style
+                            border: 'none',
+                            borderRadius: '4px',
+                            boxShadow: `0 0 6px ${highlightColor}`
+                        }} 
+                    />
+                )
             ))}
+            
+            {/* HOVER HIGHLIGHT */}
             {hoverRects.map((style, i) => (
-                !isMarkingMode && <div key={`hover-${i}`} className="hover-box" style={style} />
+                !isMarkingMode && (
+                    <div 
+                        key={`hover-${i}`} 
+                        className="hover-box" 
+                        style={{
+                            ...style,
+                            // Derived from active color settings
+                            backgroundColor: highlightColor, 
+                            opacity: 0.25, 
+                            // Soft edge style
+                            border: 'none',
+                            borderRadius: '4px',
+                            boxShadow: `0 0 6px ${highlightColor}`
+                        }} 
+                    />
+                )
             ))}
 
             {pageDimensions && skipZones.map(zone => (
