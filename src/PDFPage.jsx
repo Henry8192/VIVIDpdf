@@ -6,7 +6,9 @@ import { Icons } from './Icons';
 const MERGE_CONFIG = {
   MAX_VERTICAL_MISALIGNMENT: 0.5, 
   MAX_INTRA_WORD_GAP: 0.1, 
-  MAX_ALLOWED_OVERLAP: 0.5  
+  MAX_ALLOWED_OVERLAP: 0.5,
+  // New: Sentence heuristics
+  SENTENCE_GAP_THRESHOLD: 2 // Multiplier of height to detect paragraph breaks
 };
 
 const isTokenInZone = (tokenRect, zoneRect) => {
@@ -18,6 +20,55 @@ const isTokenInZone = (tokenRect, zoneRect) => {
   );
 };
 
+// --- Sentence Boundary Logic ---
+// Returns an array of arrays: [ [token, token], [token... ] ]
+const groupTokensIntoSentences = (tokens) => {
+  if (!tokens || tokens.length === 0) return [];
+  const sentences = [];
+  let currentSentence = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    currentSentence.push(t);
+
+    const isLast = i === tokens.length - 1;
+
+    // Handle End of Input
+    if (isLast) {
+      console.log(`Sentence: "${currentSentence.map(t => t.spokenText).join(' ')}" | Reason: End of Input`);
+      sentences.push(currentSentence);
+      break;
+    }
+
+    const nextT = tokens[i + 1];
+
+    // Heuristics
+    const hasPunctuation = /[.!?]["']?$/.test(t.spokenText.trim());
+    
+    const verticalGap = nextT.bounds.top - t.bounds.bottom;
+    const isNewParagraph = Math.abs(verticalGap) > (Math.min(nextT.bounds.height,t.bounds.height) * MERGE_CONFIG.SENTENCE_GAP_THRESHOLD);
+
+    const isFontChange = (t.fontInfo && nextT.fontInfo) && 
+                         (t.fontInfo.family !== nextT.fontInfo.family || 
+                          Math.abs(t.fontInfo.size - nextT.fontInfo.size) > 1);
+
+    // Determine Active Triggers
+    const activeTriggers = [];
+    if (hasPunctuation) activeTriggers.push('Punctuation');
+    if (isNewParagraph) activeTriggers.push('New Paragraph ');
+    if (isFontChange) activeTriggers.push('Font Change');
+
+    // Decision: Split if triggered
+    if (activeTriggers.length > 0) {
+      console.log(`Sentence: "${currentSentence.map(t => t.spokenText).join(' ')}" | Reason: ${activeTriggers.join(', ')}`);
+      console.log(verticalGap , nextT.bounds.top ,t.bounds.bottom,(t.bounds.height * MERGE_CONFIG.SENTENCE_GAP_THRESHOLD));
+      console.log(t.fontInfo.family ,nextT.fontInfo.family);
+      sentences.push(currentSentence);
+      currentSentence = [];
+    }
+  }
+  return sentences;
+};
 const PDFPage = forwardRef(({ 
   pdfDoc, 
   pageNum, 
@@ -25,6 +76,7 @@ const PDFPage = forwardRef(({
   rotation, 
   onTokensParsed, 
   activeTokenId, 
+  readingMode, // 'word' | 'sentence'
   notifyPageVisible,
   registerPageTokens,
   isMarkingMode,
@@ -68,28 +120,18 @@ const PDFPage = forwardRef(({
         let max = 0;
         let dom = 'rgb(255,255,255)';
         
-        // Scan every 40th byte (10th pixel) for speed
         for (let i = 0; i < data.length; i += 40) {
             const r = data[i];
             const g = data[i+1];
             const b = data[i+2];
             const alpha = data[i+3];
-            
-            // Ignore transparent pixels
             if (alpha < 10) continue;
-
             const k = `${r},${g},${b}`;
             counts[k] = (counts[k] || 0) + 1;
-            
-            if (counts[k] > max) {
-                max = counts[k];
-                dom = `rgb(${r},${g},${b})`;
-            }
+            if (counts[k] > max) { max = counts[k]; dom = `rgb(${r},${g},${b})`; }
         }
         return dom;
-    } catch (e) {
-        return 'rgb(255,255,255)'; // Default white
-    }
+    } catch (e) { return 'rgb(255,255,255)'; }
   };
 
   // --- Debug / Extraction Logic ---
@@ -101,25 +143,12 @@ const PDFPage = forwardRef(({
         if (!canvasRef.current || pageTokensRef.current.length === 0) return [];
         
         const tokens = pageTokensRef.current;
-        const sentences = [];
-        let currentSentence = [];
-
-        // 1. Group tokens into sentences
-        for (let i = 0; i < tokens.length; i++) {
-            const t = tokens[i];
-            currentSentence.push(t);
-            // Check punctuation
-            if (/[.!?]["']?$/.test(t.spokenText.trim())) {
-                sentences.push([...currentSentence]);
-                currentSentence = [];
-            }
-        }
-        if (currentSentence.length > 0) sentences.push(currentSentence);
+        // Use the new grouping logic
+        const sentences = groupTokensIntoSentences(tokens);
 
         const dpr = window.devicePixelRatio || 1;
         const results = [];
 
-        // 2. Process each sentence
         for (const sentenceTokens of sentences) {
             // Calculate Union Bounding Box
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -133,7 +162,6 @@ const PDFPage = forwardRef(({
                 });
             });
 
-            // Add padding
             const pad = 5;
             minX = Math.max(0, minX - pad);
             minY = Math.max(0, minY - pad);
@@ -145,24 +173,21 @@ const PDFPage = forwardRef(({
 
             if (width <= 0 || height <= 0) continue;
 
-            // Create canvas for the crop
             const cropCanvas = document.createElement('canvas');
             cropCanvas.width = width * dpr;
             cropCanvas.height = height * dpr;
             const ctx = cropCanvas.getContext('2d');
             ctx.scale(dpr, dpr);
 
-            // Draw Source Image
             ctx.drawImage(
                 canvasRef.current, 
                 minX * dpr, minY * dpr, width * dpr, height * dpr, 
                 0, 0, width, height 
             );
 
-            // --- Detect Most Likely Background Color ---
             const bgColor = getDominantColor(ctx, width * dpr, height * dpr);
 
-            // --- Masking Logic ---
+            // Masking
             const maskCanvas = document.createElement('canvas');
             maskCanvas.width = width * dpr;
             maskCanvas.height = height * dpr;
@@ -171,7 +196,6 @@ const PDFPage = forwardRef(({
 
             const sentenceTokenIds = new Set(sentenceTokens.map(t => t.id));
 
-            // A. Draw ALL NON-SENTENCE tokens using Background Color (no border)
             mCtx.fillStyle = bgColor;
             tokens.forEach(t => {
                 if (!sentenceTokenIds.has(t.id)) {
@@ -181,8 +205,6 @@ const PDFPage = forwardRef(({
                 }
             });
 
-            // B. Erase areas where SENTENCE tokens exist (Destination-Out)
-            // This prevents the "background color block" from covering the active sentence if they overlap
             mCtx.globalCompositeOperation = 'destination-out';
             sentenceTokens.forEach(t => {
                 t.parts.forEach(p => {
@@ -190,7 +212,6 @@ const PDFPage = forwardRef(({
                 });
             });
 
-            // C. Apply the mask onto the main crop
             ctx.drawImage(maskCanvas, 0, 0, width, height);
 
             results.push({
@@ -198,7 +219,6 @@ const PDFPage = forwardRef(({
                 img: cropCanvas.toDataURL('image/jpeg', 0.8)
             });
         }
-
         return results;
     }
   }));
@@ -225,7 +245,6 @@ const PDFPage = forwardRef(({
         setPageDimensions({ width: viewport.width, height: viewport.height });
         if (containerRef.current) containerRef.current.style.setProperty('--scale-factor', scale);
 
-        // Render Canvas
         if (canvasRef.current) {
             const ctx = canvasRef.current.getContext('2d');
             canvasRef.current.width = renderViewport.width;
@@ -237,7 +256,6 @@ const PDFPage = forwardRef(({
 
         if (isCancelled) return;
 
-        // Render Text Layer
         if (textLayerRef.current) {
             textLayerRef.current.innerHTML = '';
             textLayerRef.current.style.width = `${viewport.width}px`;
@@ -254,10 +272,17 @@ const PDFPage = forwardRef(({
             const spans = Array.from(textLayerRef.current.querySelectorAll('span'));
             let rawTokens = [];
             
-            // 1. Extraction Pass
+            // Extraction Pass
             spans.forEach(span => {
                 const text = span.textContent;
                 if (!text.trim()) return; 
+
+                // Heuristic: Capture Font Info from computed style
+                const computed = window.getComputedStyle(span);
+                const fontInfo = {
+                    family: computed.fontFamily,
+                    size: parseFloat(computed.fontSize) || 12
+                };
 
                 const containerRect = containerRef.current.getBoundingClientRect();
                 const regex = /\S+/g;
@@ -271,6 +296,7 @@ const PDFPage = forwardRef(({
                     rawTokens.push({
                         text: match[0],
                         spanElement: span,
+                        fontInfo, // Store for logic
                         startOffset: match.index,
                         endOffset: regex.lastIndex,
                         bounds: {
@@ -285,7 +311,7 @@ const PDFPage = forwardRef(({
                 }
             });
 
-            // 2. Merging Pass
+            // Merging Pass
             const mergedTokens = [];
             if (rawTokens.length > 0) {
                 let currentToken = { ...rawTokens[0], parts: [rawTokens[0]] };
@@ -312,6 +338,7 @@ const PDFPage = forwardRef(({
                             currentToken.text += nextToken.text;
                         }
 
+                        // Union bounds
                         const newLeft = Math.min(prevBounds.left, nextBounds.left);
                         const newTop = Math.min(prevBounds.top, nextBounds.top);
                         const newRight = Math.max(prevBounds.right, nextBounds.right);
@@ -334,7 +361,7 @@ const PDFPage = forwardRef(({
                 mergedTokens.push(currentToken);
             }
 
-            // 3. Finalize
+            // Finalize
             let finalTokens = [];
             spanMapRef.current.clear(); 
 
@@ -345,7 +372,8 @@ const PDFPage = forwardRef(({
                     text: t.text,
                     spokenText: t.text,
                     bounds: t.bounds, 
-                    parts: t.parts    
+                    parts: t.parts,
+                    fontInfo: t.parts[0].fontInfo // Use first part's font as representative
                 };
 
                 const isSkipped = skipZones.some(zone => {
@@ -458,11 +486,41 @@ const PDFPage = forwardRef(({
     );
   };
 
+  // Find the sentence containing a specific token ID
+  const getSentenceTokens = useCallback((targetTokenId) => {
+      if (!targetTokenId) return [];
+      const tokens = pageTokensRef.current;
+      const targetIndex = tokens.findIndex(t => t.id === targetTokenId || t.linkedTo === targetTokenId);
+      if (targetIndex === -1) return [];
+
+      // We need to run the grouping logic to find the range.
+      // Optimization: We could cache sentences, but recalculating on click/hover is fast enough for single pages.
+      const sentences = groupTokensIntoSentences(tokens);
+      
+      for (const sent of sentences) {
+          if (sent.some(t => t.id === targetTokenId || t.linkedTo === targetTokenId)) {
+              return sent;
+          }
+      }
+      return [tokens[targetIndex]];
+  }, []);
+
   const handlePageClick = (e) => {
     if (isMarkingMode) return;
     const clickedToken = getTokenFromEvent(e);
     if (clickedToken) {
-        onTokensParsed(pageTokensRef.current, clickedToken.id, pageNum); 
+        if (readingMode === 'sentence') {
+            // Find start of sentence
+            const sentenceTokens = getSentenceTokens(clickedToken.id);
+            if (sentenceTokens.length > 0) {
+                // Pass the ID of the first token in the sentence
+                onTokensParsed(pageTokensRef.current, sentenceTokens[0].id, pageNum);
+            } else {
+                onTokensParsed(pageTokensRef.current, clickedToken.id, pageNum);
+            }
+        } else {
+            onTokensParsed(pageTokensRef.current, clickedToken.id, pageNum); 
+        }
     }
   };
 
@@ -481,57 +539,89 @@ const PDFPage = forwardRef(({
 
   // --- Multi-Rect Calculation ---
   const getHighlightRects = useCallback((tokenOrId) => {
-    // Determine if input is a Token Object or an ID
-    let token = null;
-    if (typeof tokenOrId === 'string') {
-        token = pageTokensRef.current.find(t => t.id === tokenOrId);
+    // If Sentence Mode, and input is ID, expand to full sentence
+    let targetTokens = [];
+    
+    // Check if we are highlighting a group (sentence mode) or single token
+    if (readingMode === 'sentence') {
+         // tokenOrId might be a token object or an ID
+         const id = typeof tokenOrId === 'string' ? tokenOrId : tokenOrId.id;
+         targetTokens = getSentenceTokens(id);
     } else {
-        token = tokenOrId;
+         const t = typeof tokenOrId === 'string' ? pageTokensRef.current.find(x => x.id === tokenOrId) : tokenOrId;
+         if (t) targetTokens = [t];
+         // Also include linked hyphenated parts if in word mode
+         if (t && t.linkedTo) {
+             const linked = pageTokensRef.current.find(x => x.id === t.linkedTo);
+             if (linked) targetTokens.push(linked);
+         }
+         // Reverse link check
+         if (t) {
+             const linkedFrom = pageTokensRef.current.find(x => x.linkedTo === t.id);
+             if (linkedFrom) targetTokens.push(linkedFrom);
+         }
     }
 
-    if (!token || !token.parts || token.parts.length === 0) return [];
+    if (targetTokens.length === 0) return [];
 
-    const rects = [];
-    let currentRect = { ...token.parts[0].bounds }; 
+    // Calculate rects for ALL tokens in the target list
+    const allRects = [];
+    targetTokens.forEach(tok => {
+        if (tok.parts) {
+            tok.parts.forEach(p => allRects.push(p.bounds));
+        }
+    });
 
-    for (let i = 1; i < token.parts.length; i++) {
-        const partBounds = token.parts[i].bounds;
+    if (allRects.length === 0) return [];
+
+    // Merge overlapping/adjacent rects visually
+    // Simple approach: just return all rects. 
+    // Optimization: Merge variable lines if needed, but standard logic below is fine.
+    
+    // Reuse the previous logic but apply to the list of bounds
+    const mergedRects = [];
+    let currentRect = { ...allRects[0] };
+
+    for (let i = 1; i < allRects.length; i++) {
+        const nextBounds = allRects[i];
         
-        const isSameLine = Math.abs(currentRect.top - partBounds.top) < 
+        const isSameLine = Math.abs(currentRect.top - nextBounds.top) < 
                            (currentRect.height * MERGE_CONFIG.MAX_VERTICAL_MISALIGNMENT);
+        
+        // Also check if they are somewhat close horizontally to be part of one highlight block
+        // (For sentences, we want continuous blocks per line)
 
         if (isSameLine) {
-            const newLeft = Math.min(currentRect.left, partBounds.left);
-            const newTop = Math.min(currentRect.top, partBounds.top);
-            const newRight = Math.max(currentRect.left + currentRect.width, partBounds.left + partBounds.width);
-            const newBottom = Math.max(currentRect.top + currentRect.height, partBounds.top + partBounds.height);
-            
-            currentRect = {
-                left: newLeft,
-                top: newTop,
-                width: newRight - newLeft,
-                height: newBottom - newTop
-            };
+             const newLeft = Math.min(currentRect.left, nextBounds.left);
+             const newTop = Math.min(currentRect.top, nextBounds.top);
+             const newRight = Math.max(currentRect.left + currentRect.width, nextBounds.left + nextBounds.width);
+             const newBottom = Math.max(currentRect.top + currentRect.height, nextBounds.top + nextBounds.height);
+             
+             currentRect = {
+                 left: newLeft,
+                 top: newTop,
+                 width: newRight - newLeft,
+                 height: newBottom - newTop
+             };
         } else {
-            rects.push(currentRect);
-            currentRect = { ...partBounds };
+            mergedRects.push(currentRect);
+            currentRect = { ...nextBounds };
         }
     }
-    rects.push(currentRect);
-    return rects;
-  }, []);
+    mergedRects.push(currentRect);
+    return mergedRects;
+
+  }, [readingMode, getSentenceTokens]);
 
   // --- Highlight Logic ---
   const activeRects = useMemo(() => {
       if (!activeTokenId) return [];
-      const matches = pageTokensRef.current.filter(t => t.id === activeTokenId || t.linkedTo === activeTokenId);
-      return matches.flatMap(t => getHighlightRects(t));
+      return getHighlightRects(activeTokenId);
   }, [activeTokenId, getHighlightRects]);
 
   const hoverRects = useMemo(() => {
       if (!hoveredTokenId) return [];
-      const matches = pageTokensRef.current.filter(t => t.id === hoveredTokenId || t.linkedTo === hoveredTokenId);
-      return matches.flatMap(t => getHighlightRects(t));
+      return getHighlightRects(hoveredTokenId);
   }, [hoveredTokenId, getHighlightRects]);
 
   return (

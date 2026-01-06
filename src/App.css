@@ -555,3 +555,45 @@ canvas {
 .pdf-stream.dark-mode .textLayer {
   filter: invert(1) hue-rotate(180deg);
 }
+
+/* Reading Mode Toggle */
+.toggle-group {
+  display: flex;
+/*  border: 1px solid #ccc;*/
+  border-radius: 4px;
+  overflow: hidden;
+  margin-left: 10px;
+}
+
+.toggle-btn {
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  color: #555;
+  transition: all 0.2s ease;
+}
+
+.toggle-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* Active State: Dark background, White text */
+.toggle-btn.active {
+  background: #222; 
+  color: #fff;
+  font-weight: 600;
+}
+
+/* Dark Mode Overrides (if your app toggles a .dark-mode class on body/container) */
+.dark-mode .toggle-group {
+  border-color: #555;
+}
+.dark-mode .toggle-btn {
+  color: #aaa;
+}
+.dark-mode .toggle-btn.active {
+  background: #eee;
+  color: #111;
+}

@@ -14,6 +14,9 @@ const App = () => {
   const [rate, setRate] = useState(1.0);
   const [isDragging, setIsDragging] = useState(false);
   
+  // New: Reading Mode State
+  const [readingMode, setReadingMode] = useState('sentence'); // 'word' | 'sentence'
+
   // Navigation
   const [numPages, setNumPages] = useState(0);
   const [activePage, setActivePage] = useState(1);
@@ -163,7 +166,7 @@ const App = () => {
             // Silence the second part so it doesn't trigger a separate read
             first.spokenText = "";
             
-            // Link them for highlighting: when 'last' is active, 'first' should also highlight
+            // Link them for highlighting
             first.linkedTo = last.id;
         }
     };
@@ -305,7 +308,6 @@ const App = () => {
         let safetyFound = false;
         for (let i = pool.length - 1; i > 0; i--) {
              const txt = pool[i].spokenText.trim();
-             // Skip empty texts (silenced hyphen parts) when checking for punctuation
              if (!txt) continue;
 
              if (/[.!?]["']?$/.test(txt)) {
@@ -324,7 +326,7 @@ const App = () => {
     const map = [];
     pool.forEach(token => {
         const text = token.spokenText;
-        if (!text) return; // Skip silent tokens (merged parts) in script
+        if (!text) return; 
 
         const start = script.length;
         script += text + " ";
@@ -433,7 +435,7 @@ const App = () => {
       if (pageRef && pageRef.generateDebugImages) {
           const images = await pageRef.generateDebugImages();
           setDebugImages(images);
-          setShowSettings(false); // Close menu on action
+          setShowSettings(false); 
       } else {
           alert("Debug: Page not ready or loaded.");
       }
@@ -475,6 +477,7 @@ const App = () => {
                                 scale={scale}
                                 rotation={rotation}
                                 activeTokenId={activeTokenId}
+                                readingMode={readingMode} 
                                 onTokensParsed={handleTokenClick}
                                 notifyPageVisible={notifyPageVisible}
                                 registerPageTokens={handlePageTokensRegistered}
@@ -512,7 +515,6 @@ const App = () => {
                 <div className="player-bar">
                     {/* LEFT: Playback & Navigation */}
                     <div className="section-left">
-                        {/* Changed to standard icon-btn for unified look */}
                         <button className="icon-btn" onClick={togglePlay} disabled={isMarkingMode} style={{ opacity: isMarkingMode ? 0.5 : 1 }} title={isPlaying ? "Pause" : "Play"}>
                             {isPlaying ? <Icons.Pause /> : <Icons.Play />}
                         </button>
@@ -555,7 +557,6 @@ const App = () => {
 
                          <div className="divider-vertical small"></div>
                         
-                        {/* Changed to standard icon-btn to fix visibility issues */}
                         <button className="icon-btn" onClick={handleRotate} title="Rotate 90°">
                             <Icons.Rotate style={{ width: '20px', height: '20px' }} />
                         </button>
@@ -601,16 +602,23 @@ const App = () => {
                                         </select>
                                     </div>
 
-                                    {/* 3. Insert Auto-hide Toggle here */}
-                                    <div className="setting-item checkbox-row">
-                                        <label htmlFor="auto-hide-check">Auto-hide Menu</label>
-                                        <input 
-                                            id="auto-hide-check"
-                                            type="checkbox" 
-                                            checked={autoHide} 
-                                            onChange={(e) => setAutoHide(e.target.checked)} 
-                                            style={{ accentColor: '#6366f1', width: '16px', height: '16px' }}
-                                        />
+
+                                    <div className="setting-item">
+                                        <label style={{flex: 1}}>Reading Mode</label>
+                                        <div className="toggle-group">
+                                            <button 
+                                                className={`toggle-btn ${readingMode === 'word' ? 'active' : ''}`}
+                                                onClick={() => setReadingMode('word')}
+                                            >
+                                                Word
+                                            </button>
+                                            <button 
+                                                className={`toggle-btn ${readingMode === 'sentence' ? 'active' : ''}`}
+                                                onClick={() => setReadingMode('sentence')}
+                                            >
+                                                Sentence
+                                            </button>
+                                        </div>
                                     </div>
 
                                     <div className="setting-item">
@@ -639,8 +647,6 @@ const App = () => {
                                 </div>
                             )}
                         </div>
-
-
                     </div>
                 </div>
             </div>
