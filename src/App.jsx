@@ -7,6 +7,8 @@ import './App.css';
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 
 const App = () => {
+  // state for auto-hide
+  const [autoHide, setAutoHide] = useState(false);
   const [pdf, setPdf] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [rate, setRate] = useState(1.0);
@@ -506,7 +508,7 @@ const App = () => {
         </div>
 
         {pdf && (
-            <div className="player-bar-container">
+            <div className={`player-bar-container ${autoHide ? 'auto-hide-active' : ''}`}>
                 <div className="player-bar">
                     {/* LEFT: Playback & Navigation */}
                     <div className="section-left">
@@ -599,6 +601,18 @@ const App = () => {
                                         </select>
                                     </div>
 
+                                    {/* 3. Insert Auto-hide Toggle here */}
+                                    <div className="setting-item checkbox-row">
+                                        <label htmlFor="auto-hide-check">Auto-hide Menu</label>
+                                        <input 
+                                            id="auto-hide-check"
+                                            type="checkbox" 
+                                            checked={autoHide} 
+                                            onChange={(e) => setAutoHide(e.target.checked)} 
+                                            style={{ accentColor: '#6366f1', width: '16px', height: '16px' }}
+                                        />
+                                    </div>
+
                                     <div className="setting-item">
                                         <div className="label-row">
                                             <label>Speed</label>
@@ -625,6 +639,8 @@ const App = () => {
                                 </div>
                             )}
                         </div>
+
+
                     </div>
                 </div>
             </div>
