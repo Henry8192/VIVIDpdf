@@ -36,6 +36,9 @@ const App = () => {
   // Debug
   const [debugImages, setDebugImages] = useState([]);
 
+  // UI State
+  const [showSettings, setShowSettings] = useState(false);
+
   // Refs
   const isPlayingRef = useRef(false); 
   const rateRef = useRef(1.0);
@@ -428,6 +431,7 @@ const App = () => {
       if (pageRef && pageRef.generateDebugImages) {
           const images = await pageRef.generateDebugImages();
           setDebugImages(images);
+          setShowSettings(false); // Close menu on action
       } else {
           alert("Debug: Page not ready or loaded.");
       }
@@ -481,7 +485,10 @@ const App = () => {
                     </div>
                     {debugImages.length > 0 && (
                         <div className="debug-panel" style={{ padding: '20px', background: '#f5f5f5', borderTop: '1px solid #ccc' }}>
-                            <h3>Debug Extraction Output ({debugImages.length})</h3>
+                            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 15}}>
+                                <h3>Debug Extraction Output ({debugImages.length})</h3>
+                                <button className="icon-btn" onClick={() => setDebugImages([])}><Icons.Close/> Clear</button>
+                            </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                                 {debugImages.map((item, idx) => (
                                     <div key={idx} style={{ background: 'white', padding: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }}>
@@ -499,91 +506,125 @@ const App = () => {
         </div>
 
         {pdf && (
-            <div className="player-bar">
-                <div className="player-controls">
-                    <button className="play-fab" onClick={togglePlay} disabled={isMarkingMode} style={{ opacity: isMarkingMode ? 0.5 : 1 }}>
-                        {isPlaying ? <Icons.Pause /> : <Icons.Play />}
-                    </button>
-                    <div className="jump-group">
-                        <span className="label">Pg</span>
-                        <input 
-                            type="number" min="1" max={numPages} value={jumpInput} 
-                            onChange={(e) => setJumpInput(e.target.value)}
-                            onKeyDown={handleJumpKey}
-                            onFocus={() => setIsInputFocused(true)}
-                            onBlur={() => setIsInputFocused(false)}
-                            className="page-input"
-                        />
-                        <span className="label">/ {numPages}</span>
-                    </div>
-                </div>
-                
-                <div className="center-controls" style={{display:'flex', gap:'15px', alignItems:'center'}}>
-                    <div className="voice-group">
-                        <Icons.Voice />
-                        <select value={selectedVoiceURI} onChange={e => setSelectedVoiceURI(e.target.value)} className="voice-select">
-                            {voices.map(v => (
-                                <option key={v.voiceURI} value={v.voiceURI}>{v.name.slice(0, 20)} ({v.lang})</option>
-                            ))}
-                        </select>
-                    </div>
-
-                    <div className="zoom-group" style={{ display: 'flex', alignItems: 'center', background: '#f0f0f0', padding: '4px 8px', borderRadius: '8px' }}>
-                        <button className="icon-btn-small" onClick={handleZoomOut} title="Zoom Out" style={{padding: '4px', cursor: 'pointer'}}>
-                           <b>-</b>
+            <div className="player-bar-container">
+                <div className="player-bar">
+                    {/* LEFT: Playback & Navigation */}
+                    <div className="section-left">
+                        {/* Changed to standard icon-btn for unified look */}
+                        <button className="icon-btn" onClick={togglePlay} disabled={isMarkingMode} style={{ opacity: isMarkingMode ? 0.5 : 1 }} title={isPlaying ? "Pause" : "Play"}>
+                            {isPlaying ? <Icons.Pause /> : <Icons.Play />}
                         </button>
-                        
-                        <div style={{position:'relative', margin: '0 8px'}}>
+                        <div className="divider-vertical"></div>
+                        <div className="jump-group">
+                            <span className="label">Pg</span>
                             <input 
+                                type="number" min="1" max={numPages} value={jumpInput} 
+                                onChange={(e) => setJumpInput(e.target.value)}
+                                onKeyDown={handleJumpKey}
+                                onFocus={() => setIsInputFocused(true)}
+                                onBlur={() => setIsInputFocused(false)}
+                                className="page-input"
+                            />
+                            <span className="label">/ {numPages}</span>
+                        </div>
+                    </div>
+                    
+                    {/* CENTER: View Controls */}
+                    <div className="section-center">
+                        <div className="zoom-group">
+                            <button className="icon-btn-ghost" onClick={handleZoomOut} title="Zoom Out">-</button>
+                            <input 
+                                className="zoom-input"
                                 type="text"
                                 value={zoomInput}
                                 onChange={handleZoomInputChange}
                                 onBlur={handleZoomInputBlur}
                                 onKeyDown={handleZoomInputKeyDown}
-                                style={{ width: '40px', textAlign: 'center', border: 'none', background: 'transparent', fontWeight: 600 }}
                             />
-                            <span style={{fontSize: '10px', color: '#666'}}>%</span>
+                            <span className="zoom-unit">%</span>
+                            <button className="icon-btn-ghost" onClick={handleZoomIn} title="Zoom In">+</button>
                         </div>
 
-                        <button className="icon-btn-small" onClick={handleZoomIn} title="Zoom In" style={{padding: '4px', cursor: 'pointer'}}>
-                            <b>+</b>
-                        </button>
+                        <div className="divider-vertical small"></div>
 
-                        <div style={{width: '1px', height: '16px', background: '#ccc', margin: '0 8px'}}></div>
-
-                        <button onClick={toggleFitMode} title="Toggle Fit" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '12px', fontWeight: '600', color: '#444' }}>
+                        <button className="text-btn" onClick={toggleFitMode} title="Toggle Fit">
                            {fitMode === 'width' ? 'Fit W' : fitMode === 'height' ? 'Fit H' : 'Fit'}
                         </button>
 
-                         <div style={{width: '1px', height: '16px', background: '#ccc', margin: '0 8px'}}></div>
-
-                        <button onClick={handleRotate} title="Rotate 90°" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '16px', fontWeight: '600', color: '#444' }}>
-                            <Icons.Rotate style={{ fontSize: '20px' }} />
+                         <div className="divider-vertical small"></div>
+                        
+                        {/* Changed to standard icon-btn to fix visibility issues */}
+                        <button className="icon-btn" onClick={handleRotate} title="Rotate 90°">
+                            <Icons.Rotate style={{ width: '20px', height: '20px' }} />
                         </button>
                     </div>
-                </div>
 
-                <div className="right-controls" style={{display:'flex', gap:'10px', alignItems:'center'}}>
-                    <button 
-                        className={`icon-btn ${darkMode ? 'active' : ''}`} 
-                        onClick={() => setDarkMode(!darkMode)} 
-                        title="Toggle Dark Mode"
-                    >
-                        <span style={{fontSize:'14px'}}>🌗</span> 
-                    </button>
+                    {/* RIGHT: Tools & Settings */}
+                    <div className="section-right">
+                        <button 
+                            className={`icon-btn ${isMarkingMode ? 'active-danger' : ''}`} 
+                            onClick={() => { if (!isMarkingMode && isPlaying) togglePlay(); setIsMarkingMode(!isMarkingMode); }} 
+                            title={isMarkingMode ? "Finish Marking" : "Mark Skip Area"}
+                        >
+                            <Icons.Crop />
+                        </button>
 
-                     <button onClick={handleDebugExtract} className="icon-btn" style={{ fontWeight: 'bold', fontSize: '12px' }} title="Generate Sentence Images">
-                        Debug Extract
-                    </button>
+                        <button 
+                            className={`icon-btn ${darkMode ? 'active' : ''}`} 
+                            onClick={() => setDarkMode(!darkMode)} 
+                            title="Toggle Dark Mode"
+                        >
+                            <Icons.Moon /> 
+                        </button>
 
-                    <button className={`icon-btn ${isMarkingMode ? 'active' : ''}`} onClick={() => { if (!isMarkingMode && isPlaying) togglePlay(); setIsMarkingMode(!isMarkingMode); }} title="Mark Skip Area">
-                        <Icons.Crop />
-                        <span style={{fontSize:'12px', marginLeft:'5px'}}>{isMarkingMode ? "Done" : "Skip Area"}</span>
-                    </button>
-                    <div className="speed-slider-group">
-                        <span>Speed</span>
-                        <input type="range" min="0.5" max="3.0" step="0.1" value={rate} onChange={e => setRate(Number(e.target.value))} />
-                        <span className="speed-val">{rate.toFixed(1)}x</span>
+                        <div style={{ position: 'relative' }}>
+                            <button 
+                                className={`icon-btn ${showSettings ? 'active' : ''}`} 
+                                onClick={() => setShowSettings(!showSettings)} 
+                                title="Settings"
+                            >
+                                <Icons.Settings />
+                            </button>
+
+                            {showSettings && (
+                                <div className="settings-popup">
+                                    <div className="settings-header">Reading Settings</div>
+                                    
+                                    <div className="setting-item">
+                                        <label><Icons.Voice /> Voice</label>
+                                        <select value={selectedVoiceURI} onChange={e => setSelectedVoiceURI(e.target.value)} className="voice-select">
+                                            {voices.map(v => (
+                                                <option key={v.voiceURI} value={v.voiceURI}>{v.name.slice(0, 24)}...</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div className="setting-item">
+                                        <div className="label-row">
+                                            <label>Speed</label>
+                                            <span className="value-badge">{rate.toFixed(1)}x</span>
+                                        </div>
+                                        <input 
+                                            type="range" 
+                                            className="styled-slider"
+                                            min="0.5" max="3.0" step="0.1" 
+                                            value={rate} 
+                                            onChange={e => setRate(Number(e.target.value))} 
+                                        />
+                                        <div className="slider-labels">
+                                            <span>0.5x</span>
+                                            <span>3.0x</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="setting-divider"></div>
+                                    
+                                    <button onClick={handleDebugExtract} className="menu-btn" title="Generate Sentence Images">
+                                        Sentence Segmentation Preview
+                                    </button>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>
