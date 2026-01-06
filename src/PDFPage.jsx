@@ -59,6 +59,39 @@ const PDFPage = forwardRef(({
     return () => observer.disconnect();
   }, [pageNum, notifyPageVisible]);
 
+  // --- Helper: Detect Background Color ---
+  const getDominantColor = (ctx, w, h) => {
+    try {
+        const frame = ctx.getImageData(0, 0, w, h);
+        const data = frame.data;
+        const counts = {};
+        let max = 0;
+        let dom = 'rgb(255,255,255)';
+        
+        // Scan every 40th byte (10th pixel) for speed
+        for (let i = 0; i < data.length; i += 40) {
+            const r = data[i];
+            const g = data[i+1];
+            const b = data[i+2];
+            const alpha = data[i+3];
+            
+            // Ignore transparent pixels
+            if (alpha < 10) continue;
+
+            const k = `${r},${g},${b}`;
+            counts[k] = (counts[k] || 0) + 1;
+            
+            if (counts[k] > max) {
+                max = counts[k];
+                dom = `rgb(${r},${g},${b})`;
+            }
+        }
+        return dom;
+    } catch (e) {
+        return 'rgb(255,255,255)'; // Default white
+    }
+  };
+
   // --- Debug / Extraction Logic ---
   useImperativeHandle(ref, () => ({
     scrollIntoView: (opts) => {
@@ -88,7 +121,7 @@ const PDFPage = forwardRef(({
 
         // 2. Process each sentence
         for (const sentenceTokens of sentences) {
-            // Calculate Union Bounding Box (CSS coords)
+            // Calculate Union Bounding Box
             let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
             
             sentenceTokens.forEach(t => {
@@ -100,7 +133,7 @@ const PDFPage = forwardRef(({
                 });
             });
 
-            // Add some padding
+            // Add padding
             const pad = 5;
             minX = Math.max(0, minX - pad);
             minY = Math.max(0, minY - pad);
@@ -119,45 +152,40 @@ const PDFPage = forwardRef(({
             const ctx = cropCanvas.getContext('2d');
             ctx.scale(dpr, dpr);
 
-            // Draw the base image (cropped from main canvas)
-            // Source coords need to be in Canvas Pixels (dpr scaled)
+            // Draw Source Image
             ctx.drawImage(
                 canvasRef.current, 
-                minX * dpr, minY * dpr, width * dpr, height * dpr, // Source
-                0, 0, width, height // Dest
+                minX * dpr, minY * dpr, width * dpr, height * dpr, 
+                0, 0, width, height 
             );
 
+            // --- Detect Most Likely Background Color ---
+            const bgColor = getDominantColor(ctx, width * dpr, height * dpr);
+
             // --- Masking Logic ---
-            // Create a separate layer for the blackout mask
             const maskCanvas = document.createElement('canvas');
             maskCanvas.width = width * dpr;
             maskCanvas.height = height * dpr;
             const mCtx = maskCanvas.getContext('2d');
             mCtx.scale(dpr, dpr);
 
-            // A. Draw ALL NON-SENTENCE tokens as Black with Red Border
             const sentenceTokenIds = new Set(sentenceTokens.map(t => t.id));
-            
-            mCtx.fillStyle = 'black';
-            mCtx.strokeStyle = 'red';
-            mCtx.lineWidth = 2;
 
+            // A. Draw ALL NON-SENTENCE tokens using Background Color (no border)
+            mCtx.fillStyle = bgColor;
             tokens.forEach(t => {
                 if (!sentenceTokenIds.has(t.id)) {
                     t.parts.forEach(p => {
-                        // Offset by the crop position
                         mCtx.fillRect(p.bounds.left - minX, p.bounds.top - minY, p.bounds.width, p.bounds.height);
-                        mCtx.strokeRect(p.bounds.left - minX, p.bounds.top - minY, p.bounds.width, p.bounds.height);
                     });
                 }
             });
 
             // B. Erase areas where SENTENCE tokens exist (Destination-Out)
-            // This ensures we don't blackout the actual sentence if there's an overlap
+            // This prevents the "background color block" from covering the active sentence if they overlap
             mCtx.globalCompositeOperation = 'destination-out';
             sentenceTokens.forEach(t => {
                 t.parts.forEach(p => {
-                    // Use fill only to carve the hole
                     mCtx.fillRect(p.bounds.left - minX, p.bounds.top - minY, p.bounds.width, p.bounds.height);
                 });
             });
@@ -493,7 +521,7 @@ const PDFPage = forwardRef(({
     return rects;
   }, []);
 
-  // --- HIGHLIGHT FIX: Check for Self OR Linked ---
+  // --- Highlight Logic ---
   const activeRects = useMemo(() => {
       if (!activeTokenId) return [];
       const matches = pageTokensRef.current.filter(t => t.id === activeTokenId || t.linkedTo === activeTokenId);
