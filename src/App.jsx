@@ -277,6 +277,42 @@ const App = () => {
     }
   }, []);
 
+  // --- New: Smart Jump Logic ---
+  const performJump = async (pageNumber, doc = pdf) => {
+    if (!doc || pageNumber < 1 || pageNumber > (doc.numPages || numPages)) return;
+
+    // Optional: show loading if jumping far
+    const isFarJump = Math.abs(pageNumber - activePage) > 5;
+    if (isFarJump) setIsLoading(true);
+
+    try {
+      // 1. Prefetch page to get true dimensions
+      const page = await doc.getPage(pageNumber);
+      const viewport = page.getViewport({ 
+          scale: scale, 
+          rotation: (page.rotate + rotation) % 360 
+      });
+
+      // 2. Force the placeholder to the correct size IMMEDIATELY
+      if (pageRefs.current[pageNumber]) {
+        // We use the new exposed method on PDFPage
+        pageRefs.current[pageNumber].resizeImmediately(viewport.width, viewport.height);
+        
+        // Wait a tick for DOM update
+        await new Promise(r => setTimeout(r, 20));
+        
+        pageRefs.current[pageNumber].scrollIntoView({ behavior: 'auto', block: 'start' });
+      }
+
+      setActivePage(pageNumber);
+      if (!isInputFocused) setJumpInput(String(pageNumber));
+    } catch (e) {
+      console.error("Smart jump failed:", e);
+    } finally {
+      if (isFarJump) setIsLoading(false);
+    }
+  };
+
   const loadFromBlob = async (blob, existingMeta = null) => {
     setIsLoading(true); 
     try {
@@ -329,9 +365,8 @@ const App = () => {
 
         // Scroll to saved page (delayed to allow render)
         setTimeout(() => {
-           if (pageRefs.current[meta.lastPage]) {
-             pageRefs.current[meta.lastPage].scrollIntoView({ behavior: 'auto', block: 'start' });
-           }
+           // USE NEW JUMP LOGIC HERE
+           performJump(meta.lastPage || 1, pdfDoc);
         }, 300);
 
     } catch (error) {
@@ -380,8 +415,9 @@ const App = () => {
   const handleJumpKey = (e) => {
       if (e.key === 'Enter') {
           const page = parseInt(jumpInput);
-          if (page >= 1 && page <= numPages && pageRefs.current[page]) {
-              pageRefs.current[page].scrollIntoView({ behavior: 'smooth', block: 'start' });
+          if (page >= 1 && page <= numPages) {
+              // USE NEW JUMP LOGIC HERE
+              performJump(page);
               e.target.blur(); 
           }
       }
@@ -398,9 +434,9 @@ const App = () => {
           startIndex = pageTokens.findIndex(t => t.id === clickedTokenId);
           if (startIndex === -1) startIndex = 0;
       }
-      const tokensToPlay = pageTokens.slice(startIndex);
+      const tokens = pageTokens.slice(startIndex);
       
-      scheduleNextBatch(pageNum, tokensToPlay, true);
+      scheduleNextBatch(pageNum, tokens, true);
   }, [voices, selectedVoiceURI, rate]);
 
   // --- TTS Engine ---
@@ -414,8 +450,8 @@ const App = () => {
         const pageTokens = pageTokensMap.current.get(startPageNum);
         if (!pageTokens) {
             waitingForPageRef.current = startPageNum;
-            setActivePage(startPageNum);
-             if (pageRefs.current[startPageNum]) {
+            // Update to use smart jump if needed, though sequential TTS usually fine
+            if (pageRefs.current[startPageNum]) {
                 pageRefs.current[startPageNum].scrollIntoView({ behavior: 'smooth', block: 'start' });
             }
             return;

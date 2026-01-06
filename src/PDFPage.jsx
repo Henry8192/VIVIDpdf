@@ -85,6 +85,9 @@ const PDFPage = forwardRef(({
   const [pageDimensions, setPageDimensions] = useState(null); 
   const [hoveredTokenId, setHoveredTokenId] = useState(null);
   
+  // New state for loading animation
+  const [isRendering, setIsRendering] = useState(false);
+
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawStart, setDrawStart] = useState({ x: 0, y: 0 });
   const [currentRect, setCurrentRect] = useState(null);
@@ -136,6 +139,10 @@ const PDFPage = forwardRef(({
   useImperativeHandle(ref, () => ({
     scrollIntoView: (opts) => {
       if (containerRef.current) containerRef.current.scrollIntoView(opts);
+    },
+    // NEW: Allow parent to set exact dimensions immediately to prevent scroll jump bugs
+    resizeImmediately: (w, h) => {
+        setPageDimensions({ width: w, height: h });
     },
     getThumbnail: async () => {
         if (!canvasRef.current) return null;
@@ -241,8 +248,11 @@ const PDFPage = forwardRef(({
     let isCancelled = false;
 
     const render = async () => {
+      setIsRendering(true); // Start Spinner
       try {
         const page = await pdfDoc.getPage(pageNum);
+        if (isCancelled) return;
+
         const pixelRatio = window.devicePixelRatio || 1;
         
         const viewport = page.getViewport({ 
@@ -254,6 +264,7 @@ const PDFPage = forwardRef(({
             rotation: (page.rotate + rotation) % 360 
         });
 
+        // Update dimensions logic to handle pre-resizing
         setPageDimensions({ width: viewport.width, height: viewport.height });
         if (containerRef.current) containerRef.current.style.setProperty('--scale-factor', scale);
 
@@ -427,6 +438,8 @@ const PDFPage = forwardRef(({
         }
       } catch (err) {
         console.error(`Error rendering page ${pageNum}`, err);
+      } finally {
+        if (!isCancelled) setIsRendering(false); // Stop Spinner
       }
     };
 
@@ -626,14 +639,22 @@ const PDFPage = forwardRef(({
       ref={containerRef}
       className="pdf-page-container" 
       style={{ 
-        width: pageDimensions ? pageDimensions.width : '600px',
-        height: pageDimensions ? pageDimensions.height : '800px',
+        width: pageDimensions ? pageDimensions.width : '100%',
+        maxWidth: pageDimensions ? pageDimensions.width : '800px',
+        // If dimensions are known, use them. If not, minHeight prevents collapse to 0
+        height: pageDimensions ? pageDimensions.height : 'auto', 
+        minHeight: pageDimensions ? pageDimensions.height : '200px',
         marginBottom: '20px',
         position: 'relative',
         backgroundColor: 'white',
         boxShadow: '0 2px 5px rgba(0,0,0,0.1)',
         cursor: isMarkingMode ? 'crosshair' : 'default',
-        userSelect: isMarkingMode ? 'none' : 'auto'
+        userSelect: isMarkingMode ? 'none' : 'auto',
+        // Center placeholder content
+        display: isVisible ? 'block' : 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: '#888'
       }}
       onMouseDown={handleMouseDown}
       onMouseUp={handleMouseUp}
@@ -722,6 +743,13 @@ const PDFPage = forwardRef(({
                         height: currentRect.h
                     }}
                 />
+            )}
+
+            {/* Loading Overlay (When page is visible but still rendering) */}
+            {isRendering && (
+                <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.7)', zIndex: 5 }}>
+                    <div className="spinner" style={{width: '30px', height: '30px', border: '3px solid #ccc', borderTop: '3px solid #333', borderRadius: '50%', animation: 'spin 1s linear infinite'}}></div>
+                </div>
             )}
         </>
       )}
