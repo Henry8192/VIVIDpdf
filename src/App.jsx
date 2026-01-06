@@ -16,7 +16,8 @@ const DEFAULT_GLOBALS = {
   rate: 1.0,
   highlightEnabled: true,
   highlightColor: '#ffeb3b',
-  highlightOpacity: 0.4
+  highlightOpacity: 0.4,
+  autoHide: false
 };
 
 const App = () => {
@@ -31,7 +32,7 @@ const App = () => {
   });
 
   // state for auto-hide
-  const [autoHide, setAutoHide] = useState(false);
+  const [autoHide, setAutoHide] = useState(globalSettings.autoHide);
   const [pdf, setPdf] = useState(null);
   const [fileId, setFileId] = useState(null); // Current DB ID
   const [isPlaying, setIsPlaying] = useState(false);
@@ -103,10 +104,11 @@ const App = () => {
       rate,
       highlightEnabled,
       highlightColor,
-      highlightOpacity
+      highlightOpacity,
+      autoHide
     };
     localStorage.setItem(LS_GLOBALS, JSON.stringify(settings));
-  }, [selectedVoiceURI, readingMode, rate, highlightEnabled, highlightColor, highlightOpacity]);
+  }, [selectedVoiceURI, readingMode, rate, highlightEnabled, highlightColor, highlightOpacity, autoHide]);
 
   // 2. Load Recent Files on Mount
   useEffect(() => {
@@ -820,6 +822,18 @@ const App = () => {
                                             >
                                                 Sentence
                                             </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="setting-item">
+                                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%'}}>
+                                            <label>Focus Mode (Auto-Hide)</label>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={autoHide} 
+                                                onChange={(e) => setAutoHide(e.target.checked)} 
+                                                style={{ width: 'auto' }}
+                                            />
                                         </div>
                                     </div>
 
