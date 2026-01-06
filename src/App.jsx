@@ -32,10 +32,9 @@ const App = () => {
   // Skip / Zones
   const [isMarkingMode, setIsMarkingMode] = useState(false);
   const [skipZones, setSkipZones] = useState([]);
-
-  // Debug State
-  const [debugTriggerPage, setDebugTriggerPage] = useState(null);
-  const [debugData, setDebugData] = useState([]); 
+  
+  // Debug
+  const [debugImages, setDebugImages] = useState([]);
 
   // Refs
   const isPlayingRef = useRef(false); 
@@ -126,17 +125,6 @@ const App = () => {
     }
   };
 
-  // --- Debug Logic ---
-  const handleDebugExtract = () => {
-    setDebugData([]);
-    setDebugTriggerPage(activePage);
-  };
-
-  const handleDebugResult = useCallback((data) => {
-    setDebugData(data);
-    setDebugTriggerPage(null); 
-  }, []);
-
   // --- Core Logic ---
   const handleAddSkipZone = useCallback((zone) => {
       setSkipZones(prev => [...prev, zone]);
@@ -207,9 +195,9 @@ const App = () => {
         setIsPlaying(false);
         pageTokensMap.current.clear();
         waitingForPageRef.current = null;
+        setDebugImages([]);
         
         setSkipZones([]);
-        setDebugData([]); 
         synth.cancel();
     } catch (error) {
         console.error("Error loading PDF:", error);
@@ -246,7 +234,8 @@ const App = () => {
     }
   };
 
-  const registerPageRef = (num, el) => { pageRefs.current[num] = el; };
+  // Note: Updated to store the Component Ref, not just the DIV
+  const registerPageRef = (num, ref) => { pageRefs.current[num] = ref; };
   const notifyPageVisible = useCallback((pageNum) => { setActivePage(pageNum); }, []);
 
   const handleJumpKey = (e) => {
@@ -434,6 +423,16 @@ const App = () => {
     }
   };
 
+  const handleDebugExtract = async () => {
+      const pageRef = pageRefs.current[activePage];
+      if (pageRef && pageRef.generateDebugImages) {
+          const images = await pageRef.generateDebugImages();
+          setDebugImages(images);
+      } else {
+          alert("Debug: Page not ready or loaded.");
+      }
+  };
+
   return (
     <div className="app-layout" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
@@ -460,63 +459,41 @@ const App = () => {
                 </div>
             ) : (
                 <>
-                <div className={`pdf-stream ${darkMode ? 'dark-mode' : ''}`}>
-                    {Array.from(new Array(numPages), (_, i) => i + 1).map(pageNum => (
-                        <PDFPage 
-                            key={pageNum}
-                            pdfDoc={pdf}
-                            pageNum={pageNum}
-                            scale={scale}
-                            rotation={rotation}
-                            activeTokenId={activeTokenId}
-                            onTokensParsed={handleTokenClick}
-                            registerPageRef={registerPageRef}
-                            notifyPageVisible={notifyPageVisible}
-                            registerPageTokens={handlePageTokensRegistered}
-                            isMarkingMode={isMarkingMode}
-                            skipZones={skipZones}
-                            onAddSkipZone={handleAddSkipZone}
-                            onRemoveSkipZone={handleRemoveSkipZone}
-                            shouldExtractDebug={debugTriggerPage === pageNum}
-                            onDebugFinish={handleDebugResult}
-                        />
-                    ))}
-                </div>
-                {/* Debug Results Section */}
-                {debugData.length > 0 && (
-                    <div className="debug-results" style={{ padding: '20px', backgroundColor: '#333', color: '#fff' }}>
-                        <h3>Debug: Extracted Sentences ({debugData.length})</h3>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                            {debugData.map((item, i) => (
-                                <div key={i} style={{ backgroundColor: '#fff', padding: '10px', borderRadius: '4px' }}>
-                                    <div style={{
-                                        color: 'black', 
-                                        fontSize: '14px', 
-                                        marginBottom:'8px', 
-                                        fontFamily: 'monospace',
-                                        backgroundColor: '#f0f0f0',
-                                        padding: '5px'
-                                    }}>
-                                        <strong>Text:</strong> {item.text}
-                                    </div>
-                                    
-                                    {item.legend && item.legend.length > 0 && (
-                                        <div style={{ color: '#555', fontSize: '12px', marginBottom: '8px', lineHeight: '1.4' }}>
-                                            <strong>Blackout Legend:</strong>
-                                            <ul style={{ margin: '4px 0', paddingLeft: '20px' }}>
-                                                {item.legend.map(l => (
-                                                    <li key={l.id}><strong>[{l.id}]</strong> {l.text}</li>
-                                                ))}
-                                            </ul>
-                                        </div>
-                                    )}
-
-                                    <img src={item.url} alt={`Sentence ${i+1}`} style={{ maxWidth: '100%', border: '1px solid #ccc' }} />
-                                </div>
-                            ))}
-                        </div>
+                    <div className={`pdf-stream ${darkMode ? 'dark-mode' : ''}`}>
+                        {Array.from(new Array(numPages), (_, i) => i + 1).map(pageNum => (
+                            <PDFPage 
+                                key={pageNum}
+                                ref={(r) => registerPageRef(pageNum, r)}
+                                pdfDoc={pdf}
+                                pageNum={pageNum}
+                                scale={scale}
+                                rotation={rotation}
+                                activeTokenId={activeTokenId}
+                                onTokensParsed={handleTokenClick}
+                                notifyPageVisible={notifyPageVisible}
+                                registerPageTokens={handlePageTokensRegistered}
+                                isMarkingMode={isMarkingMode}
+                                skipZones={skipZones}
+                                onAddSkipZone={handleAddSkipZone}
+                                onRemoveSkipZone={handleRemoveSkipZone}
+                            />
+                        ))}
                     </div>
-                )}
+                    {debugImages.length > 0 && (
+                        <div className="debug-panel" style={{ padding: '20px', background: '#f5f5f5', borderTop: '1px solid #ccc' }}>
+                            <h3>Debug Extraction Output ({debugImages.length})</h3>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                {debugImages.map((item, idx) => (
+                                    <div key={idx} style={{ background: 'white', padding: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }}>
+                                        <div style={{ marginBottom: '5px', fontSize: '12px', color: '#555', fontFamily: 'monospace' }}>
+                                            {item.text}
+                                        </div>
+                                        <img src={item.img} alt={`Sentence ${idx}`} style={{ maxWidth: '100%', border: '1px solid #ddd' }} />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </>
             )}
         </div>
@@ -587,16 +564,16 @@ const App = () => {
                 </div>
 
                 <div className="right-controls" style={{display:'flex', gap:'10px', alignItems:'center'}}>
-                    <button onClick={handleDebugExtract} className="icon-btn" title="Debug Extract Sentences" style={{fontSize: '11px', fontWeight:'bold', border: '1px solid #999', padding: '4px 8px', borderRadius: '4px'}}>
-                        DEBUG
-                    </button>
-
                     <button 
                         className={`icon-btn ${darkMode ? 'active' : ''}`} 
                         onClick={() => setDarkMode(!darkMode)} 
                         title="Toggle Dark Mode"
                     >
                         <span style={{fontSize:'14px'}}>🌗</span> 
+                    </button>
+
+                     <button onClick={handleDebugExtract} className="icon-btn" style={{ fontWeight: 'bold', fontSize: '12px' }} title="Generate Sentence Images">
+                        Debug Extract
                     </button>
 
                     <button className={`icon-btn ${isMarkingMode ? 'active' : ''}`} onClick={() => { if (!isMarkingMode && isPlaying) togglePlay(); setIsMarkingMode(!isMarkingMode); }} title="Mark Skip Area">

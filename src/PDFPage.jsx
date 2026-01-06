@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { Icons } from './Icons';
 
@@ -18,23 +18,20 @@ const isTokenInZone = (tokenRect, zoneRect) => {
   );
 };
 
-const PDFPage = ({ 
+const PDFPage = forwardRef(({ 
   pdfDoc, 
   pageNum, 
   scale, 
   rotation, 
   onTokensParsed, 
   activeTokenId, 
-  registerPageRef,
   notifyPageVisible,
   registerPageTokens,
   isMarkingMode,
   skipZones,
   onAddSkipZone,
-  onRemoveSkipZone,
-  shouldExtractDebug,
-  onDebugFinish
-}) => {
+  onRemoveSkipZone
+}, ref) => {
   const [isVisible, setIsVisible] = useState(false);
   const [pageDimensions, setPageDimensions] = useState(null); 
   const [hoveredTokenId, setHoveredTokenId] = useState(null);
@@ -62,166 +59,121 @@ const PDFPage = ({
     return () => observer.disconnect();
   }, [pageNum, notifyPageVisible]);
 
-  // --- Debug Extraction Logic ---
-  useEffect(() => {
-    if (!shouldExtractDebug || !canvasRef.current || pageTokensRef.current.length === 0) return;
+  // --- Debug / Extraction Logic ---
+  useImperativeHandle(ref, () => ({
+    scrollIntoView: (opts) => {
+      if (containerRef.current) containerRef.current.scrollIntoView(opts);
+    },
+    generateDebugImages: async () => {
+        if (!canvasRef.current || pageTokensRef.current.length === 0) return [];
+        
+        const tokens = pageTokensRef.current;
+        const sentences = [];
+        let currentSentence = [];
 
-    const performExtraction = async () => {
-      console.log(`[Debug] extracting sentences for page ${pageNum}...`);
-      
-      const tokens = pageTokensRef.current;
-      const sentences = [];
-      let currentSentence = [];
-
-      // 1. Group Tokens into Sentences
-      tokens.forEach(t => {
-        currentSentence.push(t);
-        const txt = t.spokenText.trim();
-        if (/[.!?]["']?$/.test(txt)) {
-           sentences.push(currentSentence);
-           currentSentence = [];
+        // 1. Group tokens into sentences
+        for (let i = 0; i < tokens.length; i++) {
+            const t = tokens[i];
+            currentSentence.push(t);
+            // Check punctuation
+            if (/[.!?]["']?$/.test(t.spokenText.trim())) {
+                sentences.push([...currentSentence]);
+                currentSentence = [];
+            }
         }
-      });
-      if (currentSentence.length > 0) sentences.push(currentSentence);
+        if (currentSentence.length > 0) sentences.push(currentSentence);
 
-      const generatedData = [];
-      const pixelRatio = window.devicePixelRatio || 1;
-      
-      for (const sentTokens of sentences) {
-         const sentTokenIds = new Set(sentTokens.map(t => t.id));
-         const sentenceText = sentTokens.map(t => t.text).join(' ');
-         const debugBlackouts = [];
+        const dpr = window.devicePixelRatio || 1;
+        const results = [];
 
-         // 2. Find Bounding Box (Union)
-         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-         
-         sentTokens.forEach(t => {
-             minX = Math.min(minX, t.bounds.left);
-             minY = Math.min(minY, t.bounds.top);
-             maxX = Math.max(maxX, t.bounds.right);
-             maxY = Math.max(maxY, t.bounds.bottom);
-         });
+        // 2. Process each sentence
+        for (const sentenceTokens of sentences) {
+            // Calculate Union Bounding Box (CSS coords)
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            
+            sentenceTokens.forEach(t => {
+                t.parts.forEach(p => {
+                    minX = Math.min(minX, p.bounds.left);
+                    minY = Math.min(minY, p.bounds.top);
+                    maxX = Math.max(maxX, p.bounds.left + p.bounds.width);
+                    maxY = Math.max(maxY, p.bounds.top + p.bounds.height);
+                });
+            });
 
-         if (minX === Infinity) continue;
+            // Add some padding
+            const pad = 5;
+            minX = Math.max(0, minX - pad);
+            minY = Math.max(0, minY - pad);
+            maxX = Math.min(pageDimensions.width, maxX + pad);
+            maxY = Math.min(pageDimensions.height, maxY + pad);
 
-         // Add padding
-         const pad = 6;
-         minX = Math.max(0, minX - pad);
-         minY = Math.max(0, minY - pad);
-         maxX = maxX + pad;
-         maxY = maxY + pad;
+            const width = maxX - minX;
+            const height = maxY - minY;
 
-         const w = maxX - minX;
-         const h = maxY - minY;
+            if (width <= 0 || height <= 0) continue;
 
-         // 3. Create Cropped Canvas
-         const tempCanvas = document.createElement('canvas');
-         tempCanvas.width = w * pixelRatio;
-         tempCanvas.height = h * pixelRatio;
-         const ctx = tempCanvas.getContext('2d');
+            // Create canvas for the crop
+            const cropCanvas = document.createElement('canvas');
+            cropCanvas.width = width * dpr;
+            cropCanvas.height = height * dpr;
+            const ctx = cropCanvas.getContext('2d');
+            ctx.scale(dpr, dpr);
 
-         // Draw main image (crop)
-         ctx.drawImage(
-             canvasRef.current, 
-             minX * pixelRatio, minY * pixelRatio, w * pixelRatio, h * pixelRatio,
-             0, 0, w * pixelRatio, h * pixelRatio
-         );
+            // Draw the base image (cropped from main canvas)
+            // Source coords need to be in Canvas Pixels (dpr scaled)
+            ctx.drawImage(
+                canvasRef.current, 
+                minX * dpr, minY * dpr, width * dpr, height * dpr, // Source
+                0, 0, width, height // Dest
+            );
 
-         // 4. Blackout Logic
-         const maskCanvas = document.createElement('canvas');
-         maskCanvas.width = tempCanvas.width;
-         maskCanvas.height = tempCanvas.height;
-         const mCtx = maskCanvas.getContext('2d');
+            // --- Masking Logic ---
+            // Create a separate layer for the blackout mask
+            const maskCanvas = document.createElement('canvas');
+            maskCanvas.width = width * dpr;
+            maskCanvas.height = height * dpr;
+            const mCtx = maskCanvas.getContext('2d');
+            mCtx.scale(dpr, dpr);
 
-         let blackoutIndex = 1;
+            // A. Draw ALL NON-SENTENCE tokens as Black with Red Border
+            const sentenceTokenIds = new Set(sentenceTokens.map(t => t.id));
+            
+            mCtx.fillStyle = 'black';
+            mCtx.strokeStyle = 'red';
+            mCtx.lineWidth = 2;
 
-         // Step A: Draw Black Rectangles for other tokens
-         mCtx.fillStyle = "black";
-         tokens.forEach(t => {
-             if (!sentTokenIds.has(t.id)) {
-                 const tX = t.bounds.left - minX;
-                 const tY = t.bounds.top - minY;
-                 const tW = t.bounds.width;
-                 const tH = t.bounds.height;
+            tokens.forEach(t => {
+                if (!sentenceTokenIds.has(t.id)) {
+                    t.parts.forEach(p => {
+                        // Offset by the crop position
+                        mCtx.fillRect(p.bounds.left - minX, p.bounds.top - minY, p.bounds.width, p.bounds.height);
+                        mCtx.strokeRect(p.bounds.left - minX, p.bounds.top - minY, p.bounds.width, p.bounds.height);
+                    });
+                }
+            });
 
-                 // Check Intersection
-                 if (tX < w && tX + tW > 0 && tY < h && tY + tH > 0) {
-                     // Draw Black Box
-                     mCtx.fillRect(tX * pixelRatio, tY * pixelRatio, tW * pixelRatio, tH * pixelRatio);
-                     
-                     // Store for Debug Overlay pass
-                     debugBlackouts.push({
-                         id: blackoutIndex++,
-                         text: t.text,
-                         rect: { x: tX, y: tY, w: tW, h: tH }
-                     });
-                 }
-             }
-         });
+            // B. Erase areas where SENTENCE tokens exist (Destination-Out)
+            // This ensures we don't blackout the actual sentence if there's an overlap
+            mCtx.globalCompositeOperation = 'destination-out';
+            sentenceTokens.forEach(t => {
+                t.parts.forEach(p => {
+                    // Use fill only to carve the hole
+                    mCtx.fillRect(p.bounds.left - minX, p.bounds.top - minY, p.bounds.width, p.bounds.height);
+                });
+            });
 
-         // Step B: Erase current sentence area
-         mCtx.globalCompositeOperation = 'destination-out';
-         sentTokens.forEach(t => {
-             const tX = t.bounds.left - minX;
-             const tY = t.bounds.top - minY;
-             const tW = t.bounds.width;
-             const tH = t.bounds.height;
-             mCtx.fillRect(tX * pixelRatio, tY * pixelRatio, tW * pixelRatio, tH * pixelRatio);
-         });
-         
-         // Step C: Apply Mask
-         ctx.globalCompositeOperation = 'source-over';
-         ctx.drawImage(maskCanvas, 0, 0);
+            // C. Apply the mask onto the main crop
+            ctx.drawImage(maskCanvas, 0, 0, width, height);
 
-         // Step D: Debug Overlay (Red Border + Number)
-         // Draw this directly on the result context, over everything
-         ctx.lineWidth = 2;
-         ctx.strokeStyle = "red";
-         ctx.fillStyle = "white";
-         ctx.font = "bold 16px Arial";
-         ctx.textAlign = "center";
-         ctx.textBaseline = "middle";
+            results.push({
+                text: sentenceTokens.map(t => t.spokenText).join(' '),
+                img: cropCanvas.toDataURL('image/jpeg', 0.8)
+            });
+        }
 
-         debugBlackouts.forEach(item => {
-             const { x, y, w, h } = item.rect;
-             const pxX = x * pixelRatio;
-             const pxY = y * pixelRatio;
-             const pxW = w * pixelRatio;
-             const pxH = h * pixelRatio;
-
-             // Stroke Border
-             ctx.strokeRect(pxX, pxY, pxW, pxH);
-             
-             // Draw Number
-             ctx.fillText(item.id.toString(), pxX + pxW / 2, pxY + pxH / 2);
-         });
-
-         const dataUrl = tempCanvas.toDataURL('image/jpeg');
-         generatedData.push({ 
-             url: dataUrl, 
-             text: sentenceText,
-             legend: debugBlackouts.map(d => ({ id: d.id, text: d.text }))
-         });
-
-         try {
-             await fetch('https://jsonplaceholder.typicode.com/posts', {
-                 method: 'POST',
-                 headers: { 'Content-Type': 'application/json' },
-                 body: JSON.stringify({
-                     pageNum,
-                     sentenceText,
-                     image: dataUrl.substring(0, 50) + "..." 
-                 })
-             });
-         } catch (e) { /* ignore */ }
-      }
-
-      onDebugFinish(generatedData);
-    };
-
-    performExtraction();
-  }, [shouldExtractDebug, pageNum, onDebugFinish]);
-
+        return results;
+    }
+  }));
 
   // --- Rendering Logic ---
   useEffect(() => {
@@ -556,7 +508,7 @@ const PDFPage = ({
 
   return (
     <div 
-      ref={(el) => { containerRef.current = el; registerPageRef(pageNum, el); }} 
+      ref={containerRef}
       className="pdf-page-container" 
       style={{ 
         width: pageDimensions ? pageDimensions.width : '600px',
@@ -631,6 +583,6 @@ const PDFPage = ({
       )}
     </div>
   );
-};
+});
 
 export default PDFPage;
