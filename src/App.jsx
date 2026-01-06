@@ -2,25 +2,51 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import PDFPage from './PDFPage';
 import { Icons } from './Icons';
+import { initDB, saveFileRecord, getRecentFiles, updateFileMeta, getFileId } from './db';
 import './App.css';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 
+// --- Local Storage Keys ---
+const LS_GLOBALS = 'pdf_reader_globals';
+
+const DEFAULT_GLOBALS = {
+  voiceURI: "",
+  readingMode: 'sentence',
+  rate: 1.0,
+  highlightEnabled: true,
+  highlightColor: '#ffeb3b',
+  highlightOpacity: 0.4
+};
+
 const App = () => {
+  // --- Global Settings (Init from LocalStorage) ---
+  const [globalSettings, setGlobalSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem(LS_GLOBALS);
+      return saved ? { ...DEFAULT_GLOBALS, ...JSON.parse(saved) } : DEFAULT_GLOBALS;
+    } catch (e) {
+      return DEFAULT_GLOBALS;
+    }
+  });
+
   // state for auto-hide
   const [autoHide, setAutoHide] = useState(false);
   const [pdf, setPdf] = useState(null);
+  const [fileId, setFileId] = useState(null); // Current DB ID
   const [isPlaying, setIsPlaying] = useState(false);
-  const [rate, setRate] = useState(1.0);
+  
+  // Mapped from Global Settings or UI
+  const [rate, setRate] = useState(globalSettings.rate);
   const [isDragging, setIsDragging] = useState(false);
   
   // New: Reading Mode State
-  const [readingMode, setReadingMode] = useState('sentence'); // 'word' | 'sentence'
+  const [readingMode, setReadingMode] = useState(globalSettings.readingMode); 
 
   // New: Highlight Settings
-  const [highlightEnabled, setHighlightEnabled] = useState(true);
-  const [highlightColor, setHighlightColor] = useState('#ffeb3b'); // Default Yellow
-  const [highlightOpacity, setHighlightOpacity] = useState(0.4);
+  const [highlightEnabled, setHighlightEnabled] = useState(globalSettings.highlightEnabled);
+  const [highlightColor, setHighlightColor] = useState(globalSettings.highlightColor); 
+  const [highlightOpacity, setHighlightOpacity] = useState(globalSettings.highlightOpacity);
 
   // Navigation
   const [numPages, setNumPages] = useState(0);
@@ -36,7 +62,7 @@ const App = () => {
 
   // TTS State
   const [voices, setVoices] = useState([]);
-  const [selectedVoiceURI, setSelectedVoiceURI] = useState("");
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState(globalSettings.voiceURI);
   const [activeTokenId, setActiveTokenId] = useState(null);
 
   // Skip / Zones
@@ -48,10 +74,11 @@ const App = () => {
 
   // UI State
   const [showSettings, setShowSettings] = useState(false);
+  const [recentFiles, setRecentFiles] = useState([]);
 
   // Refs
   const isPlayingRef = useRef(false); 
-  const rateRef = useRef(1.0);
+  const rateRef = useRef(rate);
   const synth = window.speechSynthesis;
   const pageRefs = useRef({}); 
   const viewportRef = useRef(null); 
@@ -66,6 +93,64 @@ const App = () => {
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { rateRef.current = rate; }, [rate]);
 
+  // --- Persistence Effects ---
+
+  // 1. Save Global Settings to LocalStorage on change
+  useEffect(() => {
+    const settings = {
+      voiceURI: selectedVoiceURI,
+      readingMode,
+      rate,
+      highlightEnabled,
+      highlightColor,
+      highlightOpacity
+    };
+    localStorage.setItem(LS_GLOBALS, JSON.stringify(settings));
+  }, [selectedVoiceURI, readingMode, rate, highlightEnabled, highlightColor, highlightOpacity]);
+
+  // 2. Load Recent Files on Mount
+  useEffect(() => {
+    loadRecentFilesList();
+  }, []);
+
+  const loadRecentFilesList = async () => {
+    try {
+      const files = await getRecentFiles();
+      setRecentFiles(files);
+    } catch (e) { console.error("Failed to load recents", e); }
+  };
+
+  // 3. Save PDF-Specific State (Debounced)
+  useEffect(() => {
+    if (!fileId || !pdf) return;
+    
+    const timer = setTimeout(() => {
+      updateFileMeta(fileId, {
+        lastPage: activePage,
+        scale,
+        rotation,
+        darkMode,
+        skipZones,
+        lastOpened: Date.now()
+      });
+      // Try to capture thumbnail of current page
+      captureThumbnail();
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [fileId, activePage, scale, rotation, darkMode, skipZones]);
+
+  // --- Thumbnail Logic ---
+  const captureThumbnail = async () => {
+    if (!fileId || !pageRefs.current[activePage]) return;
+    try {
+      const thumbDataUrl = await pageRefs.current[activePage].getThumbnail();
+      if (thumbDataUrl) {
+        updateFileMeta(fileId, { thumbnail: thumbDataUrl });
+      }
+    } catch (e) { /* page might not be fully rendered yet */ }
+  };
+
   // Sync Zoom Input
   useEffect(() => {
       setZoomInput(Math.round(scale * 100).toString());
@@ -79,9 +164,14 @@ const App = () => {
     const loadVoices = () => {
       const available = window.speechSynthesis.getVoices();
       setVoices(available);
-      if (available.length > 0 && !selectedVoiceURI) {
-        const defaultVoice = available.find(v => v.default) || available[0];
-        setSelectedVoiceURI(defaultVoice?.voiceURI || "");
+      // If we have a saved voiceURI, verify it exists, otherwise default
+      if (available.length > 0) {
+        if (selectedVoiceURI && available.some(v => v.voiceURI === selectedVoiceURI)) {
+             // Saved voice is valid, keep it
+        } else {
+             const defaultVoice = available.find(v => v.default) || available[0];
+             setSelectedVoiceURI(defaultVoice?.voiceURI || "");
+        }
       }
     };
     loadVoices();
@@ -187,7 +277,7 @@ const App = () => {
     }
   }, []);
 
-  const loadFromBlob = async (blob) => {
+  const loadFromBlob = async (blob, existingMeta = null) => {
     setIsLoading(true); 
     try {
         if (blob.name) { document.title = blob.name;}
@@ -195,29 +285,65 @@ const App = () => {
         const loadingTask = pdfjsLib.getDocument({ data });
         const pdfDoc = await loadingTask.promise;
         
+        // Generate or Use ID
+        const fid = existingMeta ? existingMeta.id : getFileId(blob);
+        setFileId(fid);
+
+        // Save new record if it doesn't exist
+        if (!existingMeta) {
+          await saveFileRecord({
+            id: fid,
+            name: blob.name,
+            blob: blob,
+            lastOpened: Date.now(),
+            lastPage: 1,
+            scale: 1.5,
+            rotation: 0,
+            darkMode: false,
+            skipZones: []
+          });
+        }
+
         setPdf(pdfDoc);
         setNumPages(pdfDoc.numPages);
-        setActivePage(1);
-        setJumpInput("1");
         
-        setScale(1.5);
-        setRotation(0);
-        setFitMode('custom');
+        // Restore Settings or Default
+        const meta = existingMeta || { lastPage: 1, scale: 1.5, rotation: 0, darkMode: false, skipZones: [] };
+        
+        setActivePage(meta.lastPage || 1);
+        setJumpInput(String(meta.lastPage || 1));
+        
+        // Restore view settings
+        setScale(meta.scale || 1.5);
+        setRotation(meta.rotation || 0);
+        setDarkMode(!!meta.darkMode);
+        setSkipZones(meta.skipZones || []);
 
+        setFitMode('custom');
         setActiveTokenId(null);
         setIsPlaying(false);
         pageTokensMap.current.clear();
         waitingForPageRef.current = null;
         setDebugImages([]);
-        
-        setSkipZones([]);
         synth.cancel();
+
+        // Scroll to saved page (delayed to allow render)
+        setTimeout(() => {
+           if (pageRefs.current[meta.lastPage]) {
+             pageRefs.current[meta.lastPage].scrollIntoView({ behavior: 'auto', block: 'start' });
+           }
+        }, 300);
+
     } catch (error) {
         console.error("Error loading PDF:", error);
         alert("Failed to load PDF. Please ensure it is a valid file.");
     } finally {
         setIsLoading(false); 
     }
+  };
+
+  const handleRecentClick = (fileRecord) => {
+    loadFromBlob(fileRecord.blob, fileRecord);
   };
 
   const onFileChange = (e) => {
@@ -463,12 +589,44 @@ const App = () => {
                 </div>
             )}
             {!pdf ? (
-                <div className="empty-placeholder">
-                    <label className="upload-btn main-upload">
-                        <Icons.Upload /> Open PDF File
-                        <input type="file" accept="application/pdf" onChange={onFileChange} style={{display:'none'}} />
-                    </label>
-                    <p style={{marginTop: '20px', color: '#666', fontSize: '14px'}}>or drag and drop a file here</p>
+                <div className="dashboard-container">
+                    <div className="empty-placeholder">
+                        <label className="upload-btn main-upload">
+                            <Icons.Upload /> Open PDF File
+                            <input type="file" accept="application/pdf" onChange={onFileChange} style={{display:'none'}} />
+                        </label>
+                        <p style={{marginTop: '20px', color: '#666', fontSize: '14px'}}>or drag and drop a file here</p>
+                    </div>
+
+                    {/* RECENT FILES SECTION */}
+                    {recentFiles.length > 0 && (
+                        <div className="recent-files-section">
+                            <h3>Recently Opened</h3>
+                            <div className="recent-grid">
+                                {recentFiles.map(file => (
+                                    <div key={file.id} className="recent-card" onClick={() => handleRecentClick(file)}>
+                                        <div className="recent-thumb">
+                                            {file.thumbnail ? (
+                                                <img src={file.thumbnail} alt="preview" />
+                                            ) : (
+                                                <div className="no-thumb">PDF</div>
+                                            )}
+                                            <div className="page-badge">Pg {file.lastPage}</div>
+                                        </div>
+                                        <div className="recent-info">
+                                            <div className="recent-name" title={file.name}>{file.name}</div>
+                                            <div className="recent-date">
+                                                {new Date(file.lastOpened).toLocaleDateString(undefined, {
+                                                    month: 'short', day: 'numeric' 
+                                                })}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
                 </div>
             ) : (
                 <>

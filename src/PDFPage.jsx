@@ -137,6 +137,23 @@ const PDFPage = forwardRef(({
     scrollIntoView: (opts) => {
       if (containerRef.current) containerRef.current.scrollIntoView(opts);
     },
+    getThumbnail: async () => {
+        if (!canvasRef.current) return null;
+        // Create a small canvas for the thumbnail
+        const thumbCanvas = document.createElement('canvas');
+        const aspect = canvasRef.current.height / canvasRef.current.width;
+        const w = 200; // Thumbnail width
+        const h = w * aspect;
+        
+        thumbCanvas.width = w;
+        thumbCanvas.height = h;
+        
+        const ctx = thumbCanvas.getContext('2d');
+        // Draw the main canvas onto the thumbnail canvas
+        ctx.drawImage(canvasRef.current, 0, 0, w, h);
+        
+        return thumbCanvas.toDataURL('image/jpeg', 0.7);
+    },
     generateDebugImages: async () => {
         if (!canvasRef.current || pageTokensRef.current.length === 0) return [];
         
