@@ -31,7 +31,9 @@ const PDFPage = ({
   isMarkingMode,
   skipZones,
   onAddSkipZone,
-  onRemoveSkipZone
+  onRemoveSkipZone,
+  shouldExtractDebug,
+  onDebugFinish
 }) => {
   const [isVisible, setIsVisible] = useState(false);
   const [pageDimensions, setPageDimensions] = useState(null); 
@@ -59,6 +61,167 @@ const PDFPage = ({
     if (containerRef.current) observer.observe(containerRef.current);
     return () => observer.disconnect();
   }, [pageNum, notifyPageVisible]);
+
+  // --- Debug Extraction Logic ---
+  useEffect(() => {
+    if (!shouldExtractDebug || !canvasRef.current || pageTokensRef.current.length === 0) return;
+
+    const performExtraction = async () => {
+      console.log(`[Debug] extracting sentences for page ${pageNum}...`);
+      
+      const tokens = pageTokensRef.current;
+      const sentences = [];
+      let currentSentence = [];
+
+      // 1. Group Tokens into Sentences
+      tokens.forEach(t => {
+        currentSentence.push(t);
+        const txt = t.spokenText.trim();
+        if (/[.!?]["']?$/.test(txt)) {
+           sentences.push(currentSentence);
+           currentSentence = [];
+        }
+      });
+      if (currentSentence.length > 0) sentences.push(currentSentence);
+
+      const generatedData = [];
+      const pixelRatio = window.devicePixelRatio || 1;
+      
+      for (const sentTokens of sentences) {
+         const sentTokenIds = new Set(sentTokens.map(t => t.id));
+         const sentenceText = sentTokens.map(t => t.text).join(' ');
+         const debugBlackouts = [];
+
+         // 2. Find Bounding Box (Union)
+         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+         
+         sentTokens.forEach(t => {
+             minX = Math.min(minX, t.bounds.left);
+             minY = Math.min(minY, t.bounds.top);
+             maxX = Math.max(maxX, t.bounds.right);
+             maxY = Math.max(maxY, t.bounds.bottom);
+         });
+
+         if (minX === Infinity) continue;
+
+         // Add padding
+         const pad = 6;
+         minX = Math.max(0, minX - pad);
+         minY = Math.max(0, minY - pad);
+         maxX = maxX + pad;
+         maxY = maxY + pad;
+
+         const w = maxX - minX;
+         const h = maxY - minY;
+
+         // 3. Create Cropped Canvas
+         const tempCanvas = document.createElement('canvas');
+         tempCanvas.width = w * pixelRatio;
+         tempCanvas.height = h * pixelRatio;
+         const ctx = tempCanvas.getContext('2d');
+
+         // Draw main image (crop)
+         ctx.drawImage(
+             canvasRef.current, 
+             minX * pixelRatio, minY * pixelRatio, w * pixelRatio, h * pixelRatio,
+             0, 0, w * pixelRatio, h * pixelRatio
+         );
+
+         // 4. Blackout Logic
+         const maskCanvas = document.createElement('canvas');
+         maskCanvas.width = tempCanvas.width;
+         maskCanvas.height = tempCanvas.height;
+         const mCtx = maskCanvas.getContext('2d');
+
+         let blackoutIndex = 1;
+
+         // Step A: Draw Black Rectangles for other tokens
+         mCtx.fillStyle = "black";
+         tokens.forEach(t => {
+             if (!sentTokenIds.has(t.id)) {
+                 const tX = t.bounds.left - minX;
+                 const tY = t.bounds.top - minY;
+                 const tW = t.bounds.width;
+                 const tH = t.bounds.height;
+
+                 // Check Intersection
+                 if (tX < w && tX + tW > 0 && tY < h && tY + tH > 0) {
+                     // Draw Black Box
+                     mCtx.fillRect(tX * pixelRatio, tY * pixelRatio, tW * pixelRatio, tH * pixelRatio);
+                     
+                     // Store for Debug Overlay pass
+                     debugBlackouts.push({
+                         id: blackoutIndex++,
+                         text: t.text,
+                         rect: { x: tX, y: tY, w: tW, h: tH }
+                     });
+                 }
+             }
+         });
+
+         // Step B: Erase current sentence area
+         mCtx.globalCompositeOperation = 'destination-out';
+         sentTokens.forEach(t => {
+             const tX = t.bounds.left - minX;
+             const tY = t.bounds.top - minY;
+             const tW = t.bounds.width;
+             const tH = t.bounds.height;
+             mCtx.fillRect(tX * pixelRatio, tY * pixelRatio, tW * pixelRatio, tH * pixelRatio);
+         });
+         
+         // Step C: Apply Mask
+         ctx.globalCompositeOperation = 'source-over';
+         ctx.drawImage(maskCanvas, 0, 0);
+
+         // Step D: Debug Overlay (Red Border + Number)
+         // Draw this directly on the result context, over everything
+         ctx.lineWidth = 2;
+         ctx.strokeStyle = "red";
+         ctx.fillStyle = "white";
+         ctx.font = "bold 16px Arial";
+         ctx.textAlign = "center";
+         ctx.textBaseline = "middle";
+
+         debugBlackouts.forEach(item => {
+             const { x, y, w, h } = item.rect;
+             const pxX = x * pixelRatio;
+             const pxY = y * pixelRatio;
+             const pxW = w * pixelRatio;
+             const pxH = h * pixelRatio;
+
+             // Stroke Border
+             ctx.strokeRect(pxX, pxY, pxW, pxH);
+             
+             // Draw Number
+             ctx.fillText(item.id.toString(), pxX + pxW / 2, pxY + pxH / 2);
+         });
+
+         const dataUrl = tempCanvas.toDataURL('image/jpeg');
+         generatedData.push({ 
+             url: dataUrl, 
+             text: sentenceText,
+             legend: debugBlackouts.map(d => ({ id: d.id, text: d.text }))
+         });
+
+         try {
+             await fetch('https://jsonplaceholder.typicode.com/posts', {
+                 method: 'POST',
+                 headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify({
+                     pageNum,
+                     sentenceText,
+                     image: dataUrl.substring(0, 50) + "..." 
+                 })
+             });
+         } catch (e) { /* ignore */ }
+      }
+
+      onDebugFinish(generatedData);
+    };
+
+    performExtraction();
+  }, [shouldExtractDebug, pageNum, onDebugFinish]);
+
 
   // --- Rendering Logic ---
   useEffect(() => {

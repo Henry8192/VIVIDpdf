@@ -33,6 +33,10 @@ const App = () => {
   const [isMarkingMode, setIsMarkingMode] = useState(false);
   const [skipZones, setSkipZones] = useState([]);
 
+  // Debug State
+  const [debugTriggerPage, setDebugTriggerPage] = useState(null);
+  const [debugData, setDebugData] = useState([]); 
+
   // Refs
   const isPlayingRef = useRef(false); 
   const rateRef = useRef(1.0);
@@ -122,6 +126,17 @@ const App = () => {
     }
   };
 
+  // --- Debug Logic ---
+  const handleDebugExtract = () => {
+    setDebugData([]);
+    setDebugTriggerPage(activePage);
+  };
+
+  const handleDebugResult = useCallback((data) => {
+    setDebugData(data);
+    setDebugTriggerPage(null); 
+  }, []);
+
   // --- Core Logic ---
   const handleAddSkipZone = useCallback((zone) => {
       setSkipZones(prev => [...prev, zone]);
@@ -194,6 +209,7 @@ const App = () => {
         waitingForPageRef.current = null;
         
         setSkipZones([]);
+        setDebugData([]); 
         synth.cancel();
     } catch (error) {
         console.error("Error loading PDF:", error);
@@ -443,6 +459,7 @@ const App = () => {
                     <p style={{marginTop: '20px', color: '#666', fontSize: '14px'}}>or drag and drop a file here</p>
                 </div>
             ) : (
+                <>
                 <div className={`pdf-stream ${darkMode ? 'dark-mode' : ''}`}>
                     {Array.from(new Array(numPages), (_, i) => i + 1).map(pageNum => (
                         <PDFPage 
@@ -460,9 +477,47 @@ const App = () => {
                             skipZones={skipZones}
                             onAddSkipZone={handleAddSkipZone}
                             onRemoveSkipZone={handleRemoveSkipZone}
+                            shouldExtractDebug={debugTriggerPage === pageNum}
+                            onDebugFinish={handleDebugResult}
                         />
                     ))}
                 </div>
+                {/* Debug Results Section */}
+                {debugData.length > 0 && (
+                    <div className="debug-results" style={{ padding: '20px', backgroundColor: '#333', color: '#fff' }}>
+                        <h3>Debug: Extracted Sentences ({debugData.length})</h3>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                            {debugData.map((item, i) => (
+                                <div key={i} style={{ backgroundColor: '#fff', padding: '10px', borderRadius: '4px' }}>
+                                    <div style={{
+                                        color: 'black', 
+                                        fontSize: '14px', 
+                                        marginBottom:'8px', 
+                                        fontFamily: 'monospace',
+                                        backgroundColor: '#f0f0f0',
+                                        padding: '5px'
+                                    }}>
+                                        <strong>Text:</strong> {item.text}
+                                    </div>
+                                    
+                                    {item.legend && item.legend.length > 0 && (
+                                        <div style={{ color: '#555', fontSize: '12px', marginBottom: '8px', lineHeight: '1.4' }}>
+                                            <strong>Blackout Legend:</strong>
+                                            <ul style={{ margin: '4px 0', paddingLeft: '20px' }}>
+                                                {item.legend.map(l => (
+                                                    <li key={l.id}><strong>[{l.id}]</strong> {l.text}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+
+                                    <img src={item.url} alt={`Sentence ${i+1}`} style={{ maxWidth: '100%', border: '1px solid #ccc' }} />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+                </>
             )}
         </div>
 
@@ -532,6 +587,10 @@ const App = () => {
                 </div>
 
                 <div className="right-controls" style={{display:'flex', gap:'10px', alignItems:'center'}}>
+                    <button onClick={handleDebugExtract} className="icon-btn" title="Debug Extract Sentences" style={{fontSize: '11px', fontWeight:'bold', border: '1px solid #999', padding: '4px 8px', borderRadius: '4px'}}>
+                        DEBUG
+                    </button>
+
                     <button 
                         className={`icon-btn ${darkMode ? 'active' : ''}`} 
                         onClick={() => setDarkMode(!darkMode)} 
