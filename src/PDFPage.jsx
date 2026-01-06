@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { Icons } from './Icons';
 
@@ -18,21 +18,20 @@ const isTokenInZone = (tokenRect, zoneRect) => {
   );
 };
 
-const PDFPage = ({ 
+const PDFPage = forwardRef(({ 
   pdfDoc, 
   pageNum, 
   scale, 
   rotation, 
   onTokensParsed, 
   activeTokenId, 
-  registerPageRef,
   notifyPageVisible,
   registerPageTokens,
   isMarkingMode,
   skipZones,
   onAddSkipZone,
   onRemoveSkipZone
-}) => {
+}, ref) => {
   const [isVisible, setIsVisible] = useState(false);
   const [pageDimensions, setPageDimensions] = useState(null); 
   const [hoveredTokenId, setHoveredTokenId] = useState(null);
@@ -59,6 +58,150 @@ const PDFPage = ({
     if (containerRef.current) observer.observe(containerRef.current);
     return () => observer.disconnect();
   }, [pageNum, notifyPageVisible]);
+
+  // --- Helper: Detect Background Color ---
+  const getDominantColor = (ctx, w, h) => {
+    try {
+        const frame = ctx.getImageData(0, 0, w, h);
+        const data = frame.data;
+        const counts = {};
+        let max = 0;
+        let dom = 'rgb(255,255,255)';
+        
+        // Scan every 40th byte (10th pixel) for speed
+        for (let i = 0; i < data.length; i += 40) {
+            const r = data[i];
+            const g = data[i+1];
+            const b = data[i+2];
+            const alpha = data[i+3];
+            
+            // Ignore transparent pixels
+            if (alpha < 10) continue;
+
+            const k = `${r},${g},${b}`;
+            counts[k] = (counts[k] || 0) + 1;
+            
+            if (counts[k] > max) {
+                max = counts[k];
+                dom = `rgb(${r},${g},${b})`;
+            }
+        }
+        return dom;
+    } catch (e) {
+        return 'rgb(255,255,255)'; // Default white
+    }
+  };
+
+  // --- Debug / Extraction Logic ---
+  useImperativeHandle(ref, () => ({
+    scrollIntoView: (opts) => {
+      if (containerRef.current) containerRef.current.scrollIntoView(opts);
+    },
+    generateDebugImages: async () => {
+        if (!canvasRef.current || pageTokensRef.current.length === 0) return [];
+        
+        const tokens = pageTokensRef.current;
+        const sentences = [];
+        let currentSentence = [];
+
+        // 1. Group tokens into sentences
+        for (let i = 0; i < tokens.length; i++) {
+            const t = tokens[i];
+            currentSentence.push(t);
+            // Check punctuation
+            if (/[.!?]["']?$/.test(t.spokenText.trim())) {
+                sentences.push([...currentSentence]);
+                currentSentence = [];
+            }
+        }
+        if (currentSentence.length > 0) sentences.push(currentSentence);
+
+        const dpr = window.devicePixelRatio || 1;
+        const results = [];
+
+        // 2. Process each sentence
+        for (const sentenceTokens of sentences) {
+            // Calculate Union Bounding Box
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            
+            sentenceTokens.forEach(t => {
+                t.parts.forEach(p => {
+                    minX = Math.min(minX, p.bounds.left);
+                    minY = Math.min(minY, p.bounds.top);
+                    maxX = Math.max(maxX, p.bounds.left + p.bounds.width);
+                    maxY = Math.max(maxY, p.bounds.top + p.bounds.height);
+                });
+            });
+
+            // Add padding
+            const pad = 5;
+            minX = Math.max(0, minX - pad);
+            minY = Math.max(0, minY - pad);
+            maxX = Math.min(pageDimensions.width, maxX + pad);
+            maxY = Math.min(pageDimensions.height, maxY + pad);
+
+            const width = maxX - minX;
+            const height = maxY - minY;
+
+            if (width <= 0 || height <= 0) continue;
+
+            // Create canvas for the crop
+            const cropCanvas = document.createElement('canvas');
+            cropCanvas.width = width * dpr;
+            cropCanvas.height = height * dpr;
+            const ctx = cropCanvas.getContext('2d');
+            ctx.scale(dpr, dpr);
+
+            // Draw Source Image
+            ctx.drawImage(
+                canvasRef.current, 
+                minX * dpr, minY * dpr, width * dpr, height * dpr, 
+                0, 0, width, height 
+            );
+
+            // --- Detect Most Likely Background Color ---
+            const bgColor = getDominantColor(ctx, width * dpr, height * dpr);
+
+            // --- Masking Logic ---
+            const maskCanvas = document.createElement('canvas');
+            maskCanvas.width = width * dpr;
+            maskCanvas.height = height * dpr;
+            const mCtx = maskCanvas.getContext('2d');
+            mCtx.scale(dpr, dpr);
+
+            const sentenceTokenIds = new Set(sentenceTokens.map(t => t.id));
+
+            // A. Draw ALL NON-SENTENCE tokens using Background Color (no border)
+            mCtx.fillStyle = bgColor;
+            tokens.forEach(t => {
+                if (!sentenceTokenIds.has(t.id)) {
+                    t.parts.forEach(p => {
+                        mCtx.fillRect(p.bounds.left - minX, p.bounds.top - minY, p.bounds.width, p.bounds.height);
+                    });
+                }
+            });
+
+            // B. Erase areas where SENTENCE tokens exist (Destination-Out)
+            // This prevents the "background color block" from covering the active sentence if they overlap
+            mCtx.globalCompositeOperation = 'destination-out';
+            sentenceTokens.forEach(t => {
+                t.parts.forEach(p => {
+                    mCtx.fillRect(p.bounds.left - minX, p.bounds.top - minY, p.bounds.width, p.bounds.height);
+                });
+            });
+
+            // C. Apply the mask onto the main crop
+            ctx.drawImage(maskCanvas, 0, 0, width, height);
+
+            results.push({
+                text: sentenceTokens.map(t => t.spokenText).join(' '),
+                img: cropCanvas.toDataURL('image/jpeg', 0.8)
+            });
+        }
+
+        return results;
+    }
+  }));
 
   // --- Rendering Logic ---
   useEffect(() => {
@@ -378,7 +521,7 @@ const PDFPage = ({
     return rects;
   }, []);
 
-  // --- HIGHLIGHT FIX: Check for Self OR Linked ---
+  // --- Highlight Logic ---
   const activeRects = useMemo(() => {
       if (!activeTokenId) return [];
       const matches = pageTokensRef.current.filter(t => t.id === activeTokenId || t.linkedTo === activeTokenId);
@@ -393,7 +536,7 @@ const PDFPage = ({
 
   return (
     <div 
-      ref={(el) => { containerRef.current = el; registerPageRef(pageNum, el); }} 
+      ref={containerRef}
       className="pdf-page-container" 
       style={{ 
         width: pageDimensions ? pageDimensions.width : '600px',
@@ -468,6 +611,6 @@ const PDFPage = ({
       )}
     </div>
   );
-};
+});
 
 export default PDFPage;
