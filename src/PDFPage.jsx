@@ -144,6 +144,16 @@ const PDFPage = forwardRef(({
     resizeImmediately: (w, h) => {
         setPageDimensions({ width: w, height: h });
     },
+    // NEW: Get exact bounding rect of a token for smart scrolling
+    getTokenRect: (tokenId) => {
+        const token = pageTokensRef.current.find(t => t.id === tokenId);
+        if (token && token.parts && token.parts.length > 0) {
+            // Return the bounding client rect of the first span part
+            // This is relative to the viewport
+            return token.parts[0].spanElement.getBoundingClientRect();
+        }
+        return null;
+    },
     getThumbnail: async () => {
         if (!canvasRef.current) return null;
         // Create a small canvas for the thumbnail

@@ -17,7 +17,8 @@ const DEFAULT_GLOBALS = {
   highlightEnabled: true,
   highlightColor: '#ffeb3b',
   highlightOpacity: 0.4,
-  autoHide: false
+  autoHide: false,
+  autoScroll: true // New Default
 };
 
 const App = () => {
@@ -33,6 +34,7 @@ const App = () => {
 
   // state for auto-hide
   const [autoHide, setAutoHide] = useState(globalSettings.autoHide);
+  const [autoScroll, setAutoScroll] = useState(globalSettings.autoScroll); // New State
   const [pdf, setPdf] = useState(null);
   const [fileId, setFileId] = useState(null); // Current DB ID
   const [isPlaying, setIsPlaying] = useState(false);
@@ -80,6 +82,7 @@ const App = () => {
   // Refs
   const isPlayingRef = useRef(false); 
   const rateRef = useRef(rate);
+  const autoScrollRef = useRef(autoScroll); // Ref for closure access
   const synth = window.speechSynthesis;
   const pageRefs = useRef({}); 
   const viewportRef = useRef(null); 
@@ -93,6 +96,7 @@ const App = () => {
 
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { rateRef.current = rate; }, [rate]);
+  useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
 
   // --- Persistence Effects ---
 
@@ -105,10 +109,11 @@ const App = () => {
       highlightEnabled,
       highlightColor,
       highlightOpacity,
-      autoHide
+      autoHide,
+      autoScroll
     };
     localStorage.setItem(LS_GLOBALS, JSON.stringify(settings));
-  }, [selectedVoiceURI, readingMode, rate, highlightEnabled, highlightColor, highlightOpacity, autoHide]);
+  }, [selectedVoiceURI, readingMode, rate, highlightEnabled, highlightColor, highlightOpacity, autoHide, autoScroll]);
 
   // 2. Load Recent Files on Mount
   useEffect(() => {
@@ -279,7 +284,7 @@ const App = () => {
     }
   }, []);
 
-  // --- New: Smart Jump Logic ---
+  // --- Smart Jump Logic ---
   const performJump = async (pageNumber, doc = pdf) => {
     if (!doc || pageNumber < 1 || pageNumber > (doc.numPages || numPages)) return;
 
@@ -441,6 +446,57 @@ const App = () => {
       scheduleNextBatch(pageNum, tokens, true);
   }, [voices, selectedVoiceURI, rate]);
 
+  // --- Smart Scrolling Logic (Safe Zone) ---
+  const handleSmartScroll = (pageNum, tokenId) => {
+    // If auto-scroll is disabled, do nothing
+    if (!autoScrollRef.current) return;
+    if (!viewportRef.current) return;
+
+    const pageRef = pageRefs.current[pageNum];
+    if (!pageRef || !pageRef.getTokenRect) return;
+
+    // Get token coordinates relative to viewport
+    const tokenRect = pageRef.getTokenRect(tokenId);
+    if (!tokenRect) return;
+
+    const viewport = viewportRef.current;
+    const containerRect = viewport.getBoundingClientRect();
+
+    // Calculate token's top position relative to the visible area
+    const relativeTop = tokenRect.top - containerRect.top;
+    
+    // Viewport height
+    const vHeight = containerRect.height;
+
+    // Safe Zone Definitions
+    const safeTop = vHeight * 0.1;   // 10%
+    const safeBottom = vHeight * 0.8; // 80%
+
+    // Target Position (Where we want to move the token if it's out of bounds)
+    // We aim for the top 20% mark to show context below
+    const targetOffset = vHeight * 0.2; 
+
+    // Calculate Scroll Shift needed
+    let shiftAmount = 0;
+
+    if (relativeTop < safeTop) {
+        // Token is too high (or above viewport) -> Scroll Up
+        // Current Scroll Top + (Where it is - Where we want it)
+        shiftAmount = relativeTop - targetOffset;
+    } else if (relativeTop > safeBottom) {
+        // Token is too low (or below viewport) -> Scroll Down
+        shiftAmount = relativeTop - targetOffset;
+    }
+
+    // Only scroll if outside the Safe Zone
+    if (Math.abs(shiftAmount) > 5) { // Small threshold to prevent micro-jitters
+        viewport.scrollTo({
+            top: viewport.scrollTop + shiftAmount,
+            behavior: 'smooth'
+        });
+    }
+  };
+
   // --- TTS Engine ---
 
   const scheduleNextBatch = (startPageNum, carryOverTokens, isFirstBatch = false) => {
@@ -452,7 +508,7 @@ const App = () => {
         const pageTokens = pageTokensMap.current.get(startPageNum);
         if (!pageTokens) {
             waitingForPageRef.current = startPageNum;
-            // Update to use smart jump if needed, though sequential TTS usually fine
+            // Scroll into view if waiting for page
             if (pageRefs.current[startPageNum]) {
                 pageRefs.current[startPageNum].scrollIntoView({ behavior: 'smooth', block: 'start' });
             }
@@ -534,13 +590,17 @@ const App = () => {
         const entry = currentMap.find(m => currentIdx >= m.start && currentIdx < m.end);
         
         if (entry) {
-            setActiveTokenId(entry.token.id);
-            if (entry.token.pageNum !== activePage) {
-                setActivePage(entry.token.pageNum);
-                if (pageRefs.current[entry.token.pageNum]) {
-                    pageRefs.current[entry.token.pageNum].scrollIntoView({ behavior: 'smooth', block: 'start' });
-                }
+            const tokenId = entry.token.id;
+            const pageNum = entry.token.pageNum;
+
+            setActiveTokenId(tokenId);
+            
+            if (pageNum !== activePage) {
+                setActivePage(pageNum);
             }
+            
+            // Execute Smart Scroll Logic
+            handleSmartScroll(pageNum, tokenId);
         }
     };
 
@@ -832,6 +892,19 @@ const App = () => {
                                                 type="checkbox" 
                                                 checked={autoHide} 
                                                 onChange={(e) => setAutoHide(e.target.checked)} 
+                                                style={{ width: 'auto' }}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Auto-Scroll Setting */}
+                                    <div className="setting-item">
+                                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%'}}>
+                                            <label>Auto-Scroll</label>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={autoScroll} 
+                                                onChange={(e) => setAutoScroll(e.target.checked)} 
                                                 style={{ width: 'auto' }}
                                             />
                                         </div>
