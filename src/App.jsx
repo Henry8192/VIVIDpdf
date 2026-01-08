@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorker from 'pdfjs-dist/build/pdf.worker?url';
 import PDFPage from './PDFPage';
 import { Icons } from './Icons';
 import { initDB, saveFileRecord, getRecentFiles, updateFileMeta, getFileId } from './db';
 import './App.css';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 // --- Local Storage Keys ---
 const LS_GLOBALS = 'pdf_reader_globals';
