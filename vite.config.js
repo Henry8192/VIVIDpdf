@@ -7,13 +7,13 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['vividpdf.svg', 'robots.txt'], // Add any other static files in /public here
+      // Updated to match files actually present in your public dir
+      // Removed 'robots.txt' as it was not in your file list
+      includeAssets: ['vividpdf.svg', 'favicon.ico', 'apple-touch-icon.png', 'favicon.svg'], 
       
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
         maximumFileSizeToCacheInBytes: 5000000,
-        
-        // --- NEW: Ensures the app loads even if you refresh on a sub-route offline ---
         navigateFallback: '/index.html',
       },
 
@@ -22,28 +22,27 @@ export default defineConfig({
         short_name: 'VIVIDpdf',
         description: 'Read aloud PDF.',
         theme_color: '#ffffff',
-        background_color: '#242424', // Match your CSS :root background
-        display: "standalone", // Makes it look like a native app
-      icons: [
-        {
-          src: '/vividpdf-192.png', // Needs to be a PNG
-          sizes: '192x192',
-          type: 'image/png'
-        },
-        {
-          src: '/vividpdf-512.png', // Needs to be a PNG
-          sizes: '512x512',
-          type: 'image/png',
-          purpose: 'any maskable' // Allows Android to crop it safely
-        },
-        {
-          src: '/vividpdf.svg',
-          sizes: '512x512',
-          type: 'image/svg+xml',
-          purpose: 'any maskable' // Optional: keeps SVG for browsers that support it
-        }
-      ]
-
+        background_color: '#242424',
+        display: "standalone",
+        icons: [
+          {
+            src: '/web-app-manifest-192x192.png', 
+            sizes: '192x192',
+            type: 'image/png'
+          },
+          {
+            src: '/web-app-manifest-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any maskable'
+          },
+          {
+            src: '/vividpdf.svg',
+            sizes: '512x512',
+            type: 'image/svg+xml',
+            purpose: 'any maskable'
+          }
+        ]
       }
     })
   ],
