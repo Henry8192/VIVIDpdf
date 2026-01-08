@@ -20,21 +20,30 @@ export default defineConfig({
       manifest: {
         name: 'VIVIDpdf',
         short_name: 'VIVIDpdf',
-        description: 'A webapp that reads PDFs, tailored for academic text.',
+        description: 'Read aloud PDF.',
         theme_color: '#ffffff',
+        background_color: '#242424', // Match your CSS :root background
         display: "standalone", // Makes it look like a native app
-        icons: [
-          {
-            src: '/vividpdf.svg',
-            sizes: '192x192',
-            type: 'image/svg+xml'
-          },
-          {
-            src: '/vividpdf.svg',
-            sizes: '512x512',
-            type: 'image/svg+xml'
-          }
-        ]
+      icons: [
+        {
+          src: '/vividpdf-192.png', // Needs to be a PNG
+          sizes: '192x192',
+          type: 'image/png'
+        },
+        {
+          src: '/vividpdf-512.png', // Needs to be a PNG
+          sizes: '512x512',
+          type: 'image/png',
+          purpose: 'any maskable' // Allows Android to crop it safely
+        },
+        {
+          src: '/vividpdf.svg',
+          sizes: '512x512',
+          type: 'image/svg+xml',
+          purpose: 'any maskable' // Optional: keeps SVG for browsers that support it
+        }
+      ]
+
       }
     })
   ],
