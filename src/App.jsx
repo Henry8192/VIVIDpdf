@@ -88,6 +88,9 @@ const App = () => {
   const pageRefs = useRef({}); 
   const viewportRef = useRef(null); 
   
+  const settingsRef = useRef(null);
+  const settingsBtnRef = useRef(null);
+  
   const pageTokensMap = useRef(new Map());
   const waitingForPageRef = useRef(null);
   
@@ -120,6 +123,25 @@ const App = () => {
   useEffect(() => {
     loadRecentFilesList();
   }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+        if (
+            showSettings && 
+            settingsRef.current && 
+            !settingsRef.current.contains(event.target) &&
+            settingsBtnRef.current &&
+            !settingsBtnRef.current.contains(event.target)
+        ) {
+            setShowSettings(false);
+        }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showSettings]);
 
   const loadRecentFilesList = async () => {
     try {
@@ -847,6 +869,7 @@ const App = () => {
 
                         <div style={{ position: 'relative' }}>
                             <button 
+                                ref={settingsBtnRef}
                                 className={`icon-btn ${showSettings ? 'active' : ''}`} 
                                 onClick={() => setShowSettings(!showSettings)} 
                                 title="Settings"
@@ -855,7 +878,7 @@ const App = () => {
                             </button>
 
                             {showSettings && (
-                                <div className="settings-popup">
+                                <div className="settings-popup" ref={settingsRef}>
                                     <div className="settings-header">Reading Settings</div>
                                     
                                     <div className="setting-item">
