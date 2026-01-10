@@ -797,6 +797,9 @@ const App = () => {
              if (e.key === 'Escape') e.target.blur();
              return;
         }
+        if (e.ctrlKey || e.metaKey || e.altKey) {
+          return;
+        }
 
         const key = e.key.toLowerCase();
 
