@@ -96,6 +96,7 @@ const PDFPage = forwardRef(({
   const canvasRef = useRef(null);
   const textLayerRef = useRef(null);
   const pageTokensRef = useRef([]);
+  const allTokensRef = useRef([]); // NEW: Store all tokens before filtering
   const spanMapRef = useRef(new Map());
   const sentenceGroupsRef = useRef([]);
 
@@ -252,6 +253,66 @@ const PDFPage = forwardRef(({
     }
   }));
 
+  // --- NEW: Apply Skip Zones Logic ---
+  const applySkipZones = useCallback(() => {
+    if (allTokensRef.current.length === 0 || !pageDimensions) return;
+    
+    // If we are currently rendering, skip this update as the render will call it at the end
+    // (Optimization to avoid double work, though isRendering might toggle too fast)
+
+    const validTokens = [];
+    spanMapRef.current.clear(); 
+
+    allTokensRef.current.forEach(t => {
+        // Calculate intersection with skip zones
+        const isSkipped = skipZones.some(zone => {
+             const zonePx = {
+                left: zone.x * pageDimensions.width,
+                top: zone.y * pageDimensions.height,
+                right: (zone.x + zone.w) * pageDimensions.width,
+                bottom: (zone.y + zone.h) * pageDimensions.height
+            };
+            return isTokenInZone(t.bounds, zonePx);
+        });
+
+        // Apply visual styles directly
+        t.parts.forEach(p => {
+            if (isSkipped) {
+                p.spanElement.style.opacity = '0.2';
+                p.spanElement.style.textDecoration = 'line-through';
+            } else {
+                p.spanElement.style.opacity = '1';
+                p.spanElement.style.textDecoration = 'none';
+            }
+        });
+
+        if (!isSkipped) {
+            // Add to map for interaction
+            t.parts.forEach(part => {
+                const existing = spanMapRef.current.get(part.spanElement) || [];
+                existing.push(t);
+                spanMapRef.current.set(part.spanElement, existing);
+            });
+            validTokens.push(t);
+        }
+    });
+
+    pageTokensRef.current = validTokens;
+    if (readingMode === 'sentence') { 
+        sentenceGroupsRef.current = groupTokensIntoSentences(validTokens);
+    } else {
+        sentenceGroupsRef.current = groupTokensIntoSentences(validTokens); 
+    }
+    registerPageTokens(pageNum, validTokens);
+
+  }, [skipZones, pageDimensions, pageNum, registerPageTokens, readingMode]);
+
+  // --- NEW: Effect to trigger skip zone updates without full re-render ---
+  useEffect(() => {
+    applySkipZones();
+  }, [applySkipZones]);
+
+
   // --- Rendering Logic ---
   useEffect(() => {
     if (!isVisible || !pdfDoc) return;
@@ -397,8 +458,8 @@ const PDFPage = forwardRef(({
             }
 
             // Finalize
-            let finalTokens = [];
-            spanMapRef.current.clear(); 
+            let allCandidates = [];
+            // We do NOT clear spanMapRef here; applySkipZones will handle it.
 
             mergedTokens.forEach((t, index) => {
                 const finalToken = {
@@ -410,41 +471,13 @@ const PDFPage = forwardRef(({
                     parts: t.parts,
                     fontInfo: t.parts[0].fontInfo
                 };
-
-                const isSkipped = skipZones.some(zone => {
-                     const zonePx = {
-                        left: zone.x * viewport.width,
-                        top: zone.y * viewport.height,
-                        right: (zone.x + zone.w) * viewport.width,
-                        bottom: (zone.y + zone.h) * viewport.height
-                    };
-                    return isTokenInZone(finalToken.bounds, zonePx);
-                });
-
-                if (isSkipped) {
-                    t.parts.forEach(p => {
-                        p.spanElement.style.opacity = '0.2';
-                        p.spanElement.style.textDecoration = 'line-through';
-                    });
-                    return; 
-                }
-
-                t.parts.forEach(part => {
-                    const existing = spanMapRef.current.get(part.spanElement) || [];
-                    existing.push(finalToken);
-                    spanMapRef.current.set(part.spanElement, existing);
-                });
-
-                finalTokens.push(finalToken);
+                
+                // Store all tokens, regardless of skip zones
+                allCandidates.push(finalToken);
             });
 
-            pageTokensRef.current = finalTokens;
-            if (readingMode === 'sentence') { 
-                sentenceGroupsRef.current = groupTokensIntoSentences(finalTokens);
-            } else {
-                sentenceGroupsRef.current = groupTokensIntoSentences(finalTokens); 
-            }
-            registerPageTokens(pageNum, finalTokens);
+            allTokensRef.current = allCandidates;
+            applySkipZones(); // Trigger initial zone application
         }
       } catch (err) {
         console.error(`Error rendering page ${pageNum}`, err);
@@ -455,7 +488,7 @@ const PDFPage = forwardRef(({
 
     render();
     return () => { isCancelled = true; };
-  }, [isVisible, pdfDoc, pageNum, scale, rotation, skipZones, registerPageTokens]);
+  }, [isVisible, pdfDoc, pageNum, scale, rotation, registerPageTokens]); // Removed skipZones
 
   // --- Drawing Logic ---
   const handleMouseDown = (e) => {
