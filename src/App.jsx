@@ -535,20 +535,22 @@ const App = () => {
 
   // --- TTS Engine ---
 
-  const scheduleNextBatch = (startPageNum, carryOverTokens, isFirstBatch = false) => {
-    if (!isPlayingRef.current) return;
+  const scheduleNextBatch = (startPageNum, carryOverTokens, isFirstBatch = false, allowWait = true) => {
+    if (!isPlayingRef.current) return false;
 
     let pool = [...carryOverTokens];
     
     if (pool.length === 0) {
         const pageTokens = pageTokensMap.current.get(startPageNum);
         if (!pageTokens) {
-            waitingForPageRef.current = startPageNum;
-            // Scroll into view if waiting for page
-            if (pageRefs.current[startPageNum]) {
-                pageRefs.current[startPageNum].scrollIntoView({ behavior: 'smooth', block: 'start' });
+            if (allowWait) {
+                waitingForPageRef.current = startPageNum;
+                // Scroll into view if waiting for page
+                if (pageRefs.current[startPageNum]) {
+                    pageRefs.current[startPageNum].scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
             }
-            return;
+            return false;
         }
         pool = [...pageTokens];
     }
@@ -597,11 +599,11 @@ const App = () => {
 
     if (!script.trim()) {
         if (startPageNum < numPages) {
-            scheduleNextBatch(nextPageNum, []);
+            return scheduleNextBatch(nextPageNum, [], false, allowWait);
         } else {
             setIsPlaying(false);
+            return false;
         }
-        return;
     }
 
     const utter = new SpeechSynthesisUtterance(script);
@@ -645,9 +647,9 @@ const App = () => {
         const info = event.target.nextBatchInfo;
         
         if (info && !event.target.hasQueuedNext && info.pageNum <= numPages) {
-             if (info.leftovers.length > 0 || pageTokensMap.current.has(info.pageNum)) {
+             const queued = scheduleNextBatch(info.pageNum, info.leftovers, false, false);
+             if (queued) {
                  event.target.hasQueuedNext = true;
-                 scheduleNextBatch(info.pageNum, info.leftovers);
              }
         }
     };
@@ -661,7 +663,7 @@ const App = () => {
         if (!event.target.hasQueuedNext) {
             const info = event.target.nextBatchInfo;
             if (info && info.pageNum <= numPages) {
-                 scheduleNextBatch(info.pageNum, info.leftovers);
+                 scheduleNextBatch(info.pageNum, info.leftovers, false, true);
             } else {
                 setIsPlaying(false);
                 setActiveTokenId(null);
@@ -678,6 +680,7 @@ const App = () => {
     };
 
     synth.speak(utter);
+    return true;
   };
 
   const togglePlay = () => {
