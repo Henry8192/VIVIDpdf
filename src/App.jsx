@@ -19,7 +19,8 @@ const DEFAULT_GLOBALS = {
   highlightColor: '#ffeb3b',
   highlightOpacity: 0.4,
   autoHide: false,
-  autoScroll: true // New Default
+  autoScroll: true,
+  layoutMode: 'grid'
 };
 
 const App = () => {
@@ -121,10 +122,14 @@ const App = () => {
       highlightColor,
       highlightOpacity,
       autoHide,
-      autoScroll
+      autoScroll,
+      layoutMode: globalSettings.layoutMode
     };
     localStorage.setItem(LS_GLOBALS, JSON.stringify(settings));
-  }, [selectedVoiceURI, readingMode, rate, highlightEnabled, highlightColor, highlightOpacity, autoHide, autoScroll]);
+  }, [selectedVoiceURI, readingMode, rate, highlightEnabled, 
+      highlightColor, highlightOpacity, autoHide, autoScroll, 
+      globalSettings.layoutMode
+  ]);
 
   // 2. Load Recent Files on Mount
   useEffect(() => {
@@ -964,24 +969,33 @@ const App = () => {
                     {/* RECENT FILES SECTION */}
                     {recentFiles.length > 0 && (
                         <div className="recent-files-section">
-                            <h3>Recently Opened</h3>
-                            <div className="recent-grid">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #3f3f46', marginBottom: '20px', paddingBottom: '10px' }}>
+                                <h3 style={{ margin: 0, border: 'none', padding: 0 }}>Recently Opened</h3>
+                                
+                                {/* Toggle Button for layout view */}
+                                <button 
+                                    className="icon-btn" 
+                                    onClick={() => setGlobalSettings(prev => ({
+                                        ...prev, 
+                                        layoutMode: prev.layoutMode === 'grid' ? 'list' : 'grid' 
+                                    }))}
+                                    title={`Switch to ${globalSettings.layoutMode === 'grid' ? 'List' : 'Grid'} Layout`}
+                                >
+                                    {globalSettings.layoutMode === 'grid' ? <Icons.List /> : <Icons.Grid />}
+                                </button>
+                            </div>
+
+                            <div className={globalSettings.layoutMode === 'grid' ? 'recent-grid' : 'recent-list'}>
                                 {recentFiles.map(file => (
                                     <div key={file.id} className="recent-card" onClick={() => handleRecentClick(file)}>
                                         <div className="recent-thumb">
-                                            {file.thumbnail ? (
-                                                <img src={file.thumbnail} alt="preview" />
-                                            ) : (
-                                                <div className="no-thumb">PDF</div>
-                                            )}
+                                            {file.thumbnail ? <img src={file.thumbnail} alt="preview" /> : <div className="no-thumb">PDF</div>}
                                             <div className="page-badge">Pg {file.lastPage}</div>
                                         </div>
                                         <div className="recent-info">
                                             <div className="recent-name" title={file.name}>{file.name}</div>
                                             <div className="recent-date">
-                                                {new Date(file.lastOpened).toLocaleDateString(undefined, {
-                                                    month: 'short', day: 'numeric' 
-                                                })}
+                                                {new Date(file.lastOpened).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                                             </div>
                                         </div>
                                     </div>
