@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Icons } from './Icons';
 
 const SpeechCustomizationPanel = ({ 
@@ -8,10 +8,34 @@ const SpeechCustomizationPanel = ({
     setCustomPronunciations,
     onClose
 }) => {
+    // Track which indices have duplicate patterns
+    // If both rules are case-sensitive, exact match only.
+    // If either is case-insensitive, compare case-insensitively (they'd overlap at runtime).
+    const duplicateIndices = useMemo(() => {
+        const dupes = new Set();
+        for (let i = 0; i < customPronunciations.length; i++) {
+            const pi = customPronunciations[i].pattern.trim();
+            if (!pi) continue;
+            for (let j = i + 1; j < customPronunciations.length; j++) {
+                const pj = customPronunciations[j].pattern.trim();
+                if (!pj) continue;
+                const bothCaseSensitive = customPronunciations[i].caseSensitive && customPronunciations[j].caseSensitive;
+                const match = bothCaseSensitive
+                    ? pi === pj
+                    : pi.toLowerCase() === pj.toLowerCase();
+                if (match) {
+                    dupes.add(i);
+                    dupes.add(j);
+                }
+            }
+        }
+        return dupes;
+    }, [customPronunciations]);
+
     const handleAddPronunciation = () => {
         setCustomPronunciations([
             ...customPronunciations, 
-            { pattern: '', replacement: '', caseSensitive: false }
+            { pattern: '', replacement: '', caseSensitive: false, matchType: 'exact' }
         ]);
     };
 
@@ -50,7 +74,7 @@ const SpeechCustomizationPanel = ({
                                         placeholder="Original text" 
                                         value={rule.pattern} 
                                         onChange={(e) => handleUpdatePronunciation(index, 'pattern', e.target.value)}
-                                        style={{ flex: 1, minWidth: '80px', padding: '4px', fontSize: '12px', border: '1px solid #3f3f46', borderRadius: '4px', background: '#18181b', color: '#e4e4e7' }}
+                                        style={{ flex: 1, minWidth: '80px', padding: '4px', fontSize: '12px', border: `1px solid ${duplicateIndices.has(index) ? '#ef4444' : '#3f3f46'}`, borderRadius: '4px', background: '#18181b', color: '#e4e4e7' }}
                                     />
                                     <span style={{ color: '#a1a1aa' }}>→</span>
                                     <input 
@@ -60,7 +84,20 @@ const SpeechCustomizationPanel = ({
                                         onChange={(e) => handleUpdatePronunciation(index, 'replacement', e.target.value)}
                                         style={{ flex: 1, minWidth: '80px', padding: '4px', fontSize: '12px', border: '1px solid #3f3f46', borderRadius: '4px', background: '#18181b', color: '#e4e4e7' }}
                                     />
-                                    <div style={{ display: 'flex', alignItems: 'center', width: '100%', justifyContent: 'space-between', marginTop: '4px' }}>
+                                    {duplicateIndices.has(index) && (
+                                        <div style={{ width: '100%', fontSize: '11px', color: '#ef4444', marginTop: '2px' }}>Duplicate word — only the first entry will be used</div>
+                                    )}
+                                    <div style={{ display: 'flex', alignItems: 'center', width: '100%', justifyContent: 'space-between', marginTop: '4px', gap: '6px' }}>
+                                        <select
+                                            value={rule.matchType || 'exact'}
+                                            onChange={(e) => handleUpdatePronunciation(index, 'matchType', e.target.value)}
+                                            style={{ padding: '2px 4px', fontSize: '11px', border: '1px solid #3f3f46', borderRadius: '4px', background: '#18181b', color: '#e4e4e7', cursor: 'pointer' }}
+                                        >
+                                            <option value="exact">Exact word</option>
+                                            <option value="contains">Contains</option>
+                                            <option value="startsWith">Starts with</option>
+                                            <option value="endsWith">Ends with</option>
+                                        </select>
                                         <label style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', color: '#a1a1aa' }}>
                                             <input 
                                                 type="checkbox" 
@@ -131,6 +168,21 @@ const SpeechCustomizationPanel = ({
                     </div>
                     <div style={{ fontSize: '11px', color: '#a1a1aa', marginTop: '8px' }}>
                         These rules apply to all spoken speech.
+                    </div>
+                </div>
+
+                <div>
+                    <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#e4e4e7' }}>Visual Indicator</h4>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: '#e4e4e7' }}>
+                        <input 
+                            type="checkbox" 
+                            checked={speechCustomization.visualIndicator} 
+                            onChange={(e) => setSpeechCustomization({...speechCustomization, visualIndicator: e.target.checked})}
+                        />
+                        Dim affected words in viewer
+                    </label>
+                    <div style={{ fontSize: '11px', color: '#a1a1aa', marginTop: '8px' }}>
+                        Deemphasizes words that will be skipped or replaced during speech.
                     </div>
                 </div>
             </div>
