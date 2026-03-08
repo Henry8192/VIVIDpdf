@@ -21,14 +21,15 @@ body {
     flex-direction: column;
     position: relative;
     background: #202023;
+    min-width: 0;
+    min-height: 0;
 }
 
 /* --- VIEWPORT & PDF RENDERING --- */
 .scroll-viewport {
     flex: 1;
-    overflow-y: auto;
+    overflow: auto;
     display: flex;
-    justify-content: center;
     padding: 40px 0 120px 0;
     scroll-behavior: smooth;
 }
@@ -37,7 +38,9 @@ body {
     flex-direction: column;
     align-items: center;
     gap: 20px;
-    width: 100%;
+    margin: 0 auto;
+    min-width: 100%;
+    width: max-content;
 }
 
 .pdf-page-container {
@@ -187,11 +190,13 @@ canvas {
     bottom: 0;           /* Sit flush at bottom to catch mouse */
     left: 0; 
     right: 0;
-    height: 80px;        /* Height of the "hover detection zone" */
+    min-height: 80px;        /* Height of the "hover detection zone" */
+    height: auto;
     display: flex;
     justify-content: center;
     align-items: flex-end; /* Push actual bar to the desired spot */
     padding-bottom: 20px;  /* Visual offset from bottom */
+    padding-top: 20px;
     z-index: 100;
     pointer-events: none;  /* Let clicks pass through by default */
     transition: z-index 0s linear 0.3s; /* Delay z-index drop when hiding */
@@ -208,14 +213,18 @@ canvas {
     /* ... existing styles (bg, border, etc.) ... */
     background: rgba(30, 30, 33, 0.95);
     border: 1px solid #3f3f46;
-    border-radius: 100px;
+    border-radius: 24px;
     padding: 6px 12px;
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 12px;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
     backdrop-filter: blur(12px);
-    height: 48px;
+    height: auto;
+    min-height: 48px;
+    max-width: 95vw;
     
     /* Animation props */
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
