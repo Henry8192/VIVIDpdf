@@ -722,11 +722,14 @@ const App = () => {
       utter.onend = () => {
           if (isJumpingRef.current) return;
           if (isPlayingRef.current) {
-              if (info.nextTokenId) {
-                  playNextSentenceAI(info.pageNum, info.nextTokenId);
-              } else {
-                  playNextSentenceAI(info.nextPageNum, null);
-              }
+              setTimeout(() => {
+                  if (!isPlayingRef.current || isJumpingRef.current) return;
+                  if (info.nextTokenId) {
+                      playNextSentenceAI(info.pageNum, info.nextTokenId);
+                  } else {
+                      playNextSentenceAI(info.nextPageNum, null);
+                  }
+              }, 500); // 0.5s pause between sentences
           }
       };
 
@@ -775,22 +778,23 @@ const App = () => {
     let endIndex = pool.length;
     let nextLeftovers = [];
     
-    if (hasNextPage) {
-        let safetyFound = false;
-        for (let i = pool.length - 1; i > 0; i--) {
-             const txt = pool[i].spokenText.trim();
-             if (!txt) continue;
+    // Chunk by ONE sentence to allow 0.5s gaps between them
+    let safetyFound = false;
+    for (let i = 0; i < pool.length; i++) {
+         const txt = pool[i].spokenText.trim();
+         if (!txt) continue;
 
-             if (/[.!?]["']?$/.test(txt)) {
-                 endIndex = i + 1;
-                 safetyFound = true;
-                 break;
-             }
-        }
-        if (safetyFound && endIndex < pool.length) {
-            nextLeftovers = pool.slice(endIndex);
-            pool = pool.slice(0, endIndex);
-        }
+         if (/[.!?]["']?$/.test(txt)) {
+             endIndex = i + 1;
+             safetyFound = true;
+             break; // Stop at FIRST sentence boundary
+         }
+    }
+    
+    // If we only found a boundary at the very last token, there are no leftovers
+    if (safetyFound && endIndex < pool.length) {
+        nextLeftovers = pool.slice(endIndex);
+        pool = pool.slice(0, endIndex);
     }
 
     // Apply skipping rules on the full joined text so bracket pairs that span
@@ -899,15 +903,7 @@ const App = () => {
     };
 
     utter.onstart = (event) => {
-        if (!isPlayingRef.current) return;
-        const info = event.target.nextBatchInfo;
-        
-        if (info && !event.target.hasQueuedNext && info.pageNum <= numPages) {
-             const queued = scheduleNextBatch(info.pageNum, info.leftovers, false, false);
-             if (queued) {
-                 event.target.hasQueuedNext = true;
-             }
-        }
+        // Removed pre-queueing to allow custom delay interval between sentences
     };
 
     utter.onend = (event) => {
@@ -916,14 +912,16 @@ const App = () => {
         if (isJumpingRef.current) return;
 
         if (!isPlayingRef.current) return;
-        if (!event.target.hasQueuedNext) {
-            const info = event.target.nextBatchInfo;
-            if (info && info.pageNum <= numPages) {
-                 scheduleNextBatch(info.pageNum, info.leftovers, false, true);
-            } else {
-                setIsPlaying(false);
-                setActiveTokenId(null);
-            }
+        
+        const info = event.target.nextBatchInfo;
+        if (info && info.pageNum <= numPages) {
+            setTimeout(() => {
+                if (!isPlayingRef.current || isJumpingRef.current) return;
+                scheduleNextBatch(info.pageNum, info.leftovers, false, true);
+            }, 500); // 0.5s pause between sentences
+        } else {
+            setIsPlaying(false);
+            setActiveTokenId(null);
         }
     };
 
