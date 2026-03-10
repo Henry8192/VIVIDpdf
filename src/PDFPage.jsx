@@ -698,7 +698,12 @@ const PDFPage = forwardRef(({
         const isSameLine = Math.abs(currentRect.top - nextBounds.top) < 
                            (currentRect.height * MERGE_CONFIG.MAX_VERTICAL_MISALIGNMENT);
         
-        if (isSameLine) {
+        // Only merge if the rectangles are horizontally close together or overlapping
+        // We do not want to merge a left-column item with a right-column item.
+        const gap = nextBounds.left - (currentRect.left + currentRect.width);
+        const isHorizontallyAdjacent = gap < (currentRect.height * 2.0); // allows a gap of ~2 characters
+        
+        if (isSameLine && isHorizontallyAdjacent) {
              const newLeft = Math.min(currentRect.left, nextBounds.left);
              const newTop = Math.min(currentRect.top, nextBounds.top);
              const newRight = Math.max(currentRect.left + currentRect.width, nextBounds.left + nextBounds.width);

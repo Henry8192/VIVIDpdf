@@ -6,6 +6,7 @@ import { Icons } from './Icons';
 import { initDB, saveFileRecord, getRecentFiles, updateFileMeta, getFileId } from './db';
 import { fixTranscriptWithAI, getStoredCost, resetCostUsage } from './aiService'; // IMPORT AI SERVICE
 import { applySkippingRules, applyCustomPronunciations } from './speechUtils';
+import { groupTokensIntoSentences } from './parsing';
 import SpeechCustomizationPanel from './SpeechCustomizationPanel';
 import './App.css';
 
@@ -608,37 +609,30 @@ const App = () => {
     }
   };
 
-  // --- Helper for AI Flow: Sentence Parsing (From Legacy) ---
+  // --- Helper for AI Flow: Sentence Parsing ---
   const getNextSentenceInfo = (startPageNum, startTokenId) => {
       let tokens = pageTokensMap.current.get(startPageNum) || [];
       if (tokens.length === 0) return { nextPage: true, pageNum: startPageNum };
 
-      let startIndex = 0;
+      const sentences = groupTokensIntoSentences(tokens);
+      let sentenceIndex = 0;
+      
       if (startTokenId) {
-          startIndex = tokens.findIndex(t => t.id === startTokenId);
-          if (startIndex === -1) startIndex = 0;
+          sentenceIndex = sentences.findIndex(s => s.some(t => t.id === startTokenId || t.linkedTo === startTokenId));
+          if (sentenceIndex === -1) sentenceIndex = 0;
       }
 
-      if (startIndex >= tokens.length) return { nextPage: true, pageNum: startPageNum };
+      if (sentenceIndex >= sentences.length) return { nextPage: true, pageNum: startPageNum };
 
-      const sentenceTokens = [];
-      let nextIndex = startIndex;
-
-      for (let i = startIndex; i < tokens.length; i++) {
-          const t = tokens[i];
-          sentenceTokens.push(t);
-          nextIndex = i + 1;
-          // Basic Sentence Boundary Check
-          if (/[.!?]["']?$/.test(t.spokenText.trim())) {
-              break;
-          }
-      }
+      const sentenceTokens = sentences[sentenceIndex];
+      const nextSentence = sentences[sentenceIndex + 1];
+      const nextTokenId = nextSentence && nextSentence.length > 0 ? nextSentence[0].id : null;
 
       return {
           tokens: sentenceTokens,
           pageNum: startPageNum,
-          nextTokenId: nextIndex < tokens.length ? tokens[nextIndex].id : null,
-          nextPageNum: nextIndex >= tokens.length ? startPageNum + 1 : startPageNum
+          nextTokenId: nextTokenId,
+          nextPageNum: nextTokenId ? startPageNum : startPageNum + 1
       };
   };
 

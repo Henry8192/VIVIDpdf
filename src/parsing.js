@@ -18,6 +18,28 @@ export const isTokenInZone = (tokenRect, zoneRect) => {
 // --- Sentence Boundary Logic ---
 export const groupTokensIntoSentences = (tokens) => {
   if (!tokens || tokens.length === 0) return [];
+
+  // Calculate generic page statistics to make heuristics robust
+  const lineGaps = [];
+  for (let i = 0; i < tokens.length - 1; i++) {
+      const t1 = tokens[i];
+      const t2 = tokens[i+1];
+      const avgH = (t1.bounds.height + t2.bounds.height) / 2;
+      const gap = t2.bounds.top - t1.bounds.top;
+      if (gap > avgH * 0.5 && gap < avgH * 5) {
+          lineGaps.push(gap / avgH);
+      }
+  }
+
+  let medianLineGap = 1.2; // default standard line spacing
+  if (lineGaps.length > 0) {
+      lineGaps.sort((a, b) => a - b);
+      medianLineGap = lineGaps[Math.floor(lineGaps.length / 2)];
+  }
+
+  // Ensure median is within reasonable bounds (e.g. 1.0 to 2.5)
+  medianLineGap = Math.max(1.0, Math.min(medianLineGap, 2.5));
+
   const sentences = [];
   let currentSentence = [];
 
@@ -25,31 +47,62 @@ export const groupTokensIntoSentences = (tokens) => {
     const t = tokens[i];
     currentSentence.push(t);
 
-    const isLast = i === tokens.length - 1;
-
-    if (isLast) {
+    if (i === tokens.length - 1) {
       sentences.push(currentSentence);
       break;
     }
 
     const nextT = tokens[i + 1];
-
-    // Heuristics
-    const hasPunctuation = /[.!?]["']?$/.test(t.spokenText.trim());
     
-    const verticalGap = nextT.bounds.top - t.bounds.bottom;
-    const isNewParagraph = Math.abs(verticalGap) > ((nextT.bounds.height+t.bounds.height)/2 * MERGE_CONFIG.SENTENCE_GAP_THRESHOLD);
+    const averageHeight = (nextT.bounds.height + t.bounds.height) / 2;
+    const topToTop = nextT.bounds.top - t.bounds.top;
+    
+    const isNewline = topToTop > averageHeight * 0.5;
+    
+    // A gap is a paragraph gap if it's significantly larger than the regular line gap for this page
+    // Needs to be at least 1.4x, AND 1.3x the median gap.
+    const isParagraphGap = topToTop > averageHeight * Math.max(1.4, medianLineGap * 1.3);
+    const isMassiveGap = topToTop > averageHeight * 2.5;
 
-    const isPossiblyNewParagraph = Math.abs(verticalGap) > (Math.max(nextT.bounds.height+t.bounds.height) * MERGE_CONFIG.SENTENCE_GAP_THRESHOLD);
+    const isDifferentFontName = t.fontInfo && nextT.fontInfo && t.fontInfo.name !== nextT.fontInfo.name;
+    const sizeDiff = t.fontInfo && nextT.fontInfo ? Math.abs(t.fontInfo.size - nextT.fontInfo.size) : 0;
+    const isBigSizeChange = sizeDiff > 1.2;
+    const isAnyFontChange = isDifferentFontName || sizeDiff > 0.5;
 
-    const isFontChange = (t.fontInfo && nextT.fontInfo) && 
-                         (t.fontInfo.name !== nextT.fontInfo.name || Math.abs(t.fontInfo.size - nextT.fontInfo.size) > 1);
-    const isBigFontChange = (t.fontInfo && nextT.fontInfo) && ((Math.abs(t.fontInfo.size - nextT.fontInfo.size) > 10) || (t.fontInfo.name !== nextT.fontInfo.name && Math.abs(t.fontInfo.size - nextT.fontInfo.size) > 4));
+    const currentText = t.spokenText.trim();
+    const nextText = nextT.spokenText.trim();
+
+    const hasPunctuation = /[.!?]["']?$/.test(currentText);
+    const endsWithContinuation = /[,:;—-]$/.test(currentText);
+    const nextStartsCapital = /^[A-Z0-9]/.test(nextText);
 
     const activeTriggers = [];
-    if (hasPunctuation) activeTriggers.push('Punctuation');
-    if (isNewParagraph&&isFontChange) activeTriggers.push('New Paragraph &&Font Change');
-    if (isBigFontChange&&isPossiblyNewParagraph) activeTriggers.push('big font change');
+
+    if (hasPunctuation) {
+        activeTriggers.push('Punctuation');
+    }
+
+    if (isNewline) {
+        // 1. Heading or Title transition (Big size change)
+        if (isBigSizeChange && !endsWithContinuation) {
+            activeTriggers.push('Big Font Size Change');
+        }
+
+        // 2. Safe Font Change (e.g. bold to normal) AND capital letter (like Heading -> Paragraph)
+        if (isAnyFontChange && nextStartsCapital && !endsWithContinuation) {
+            activeTriggers.push('Font Change + Capital');
+        }
+
+        // 3. Significant vertical gap
+        if (isParagraphGap && !endsWithContinuation) {
+            activeTriggers.push('Paragraph Gap');
+        }
+
+        // 4. Strong structural break: Massively separated
+        if (isMassiveGap) {
+            activeTriggers.push('Massive Gap');
+        }
+    }
 
     if (activeTriggers.length > 0) {
       sentences.push(currentSentence);
