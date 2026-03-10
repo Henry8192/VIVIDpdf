@@ -20,16 +20,19 @@ export const groupTokensIntoSentences = (tokens) => {
   if (!tokens || tokens.length === 0) return [];
 
   // Calculate generic page statistics to make heuristics robust
+  const lineHeights = [];
   const lineGaps = [];
   for (let i = 0; i < tokens.length - 1; i++) {
       const t1 = tokens[i];
       const t2 = tokens[i+1];
       const avgH = (t1.bounds.height + t2.bounds.height) / 2;
+      lineHeights.push(t1.bounds.height);
       const gap = t2.bounds.top - t1.bounds.top;
       if (gap > avgH * 0.5 && gap < avgH * 5) {
           lineGaps.push(gap / avgH);
       }
   }
+  if (tokens.length > 0) lineHeights.push(tokens[tokens.length - 1].bounds.height);
 
   let medianLineGap = 1.2; // default standard line spacing
   if (lineGaps.length > 0) {
@@ -57,7 +60,15 @@ export const groupTokensIntoSentences = (tokens) => {
     const averageHeight = (nextT.bounds.height + t.bounds.height) / 2;
     const topToTop = nextT.bounds.top - t.bounds.top;
     
-    const isNewline = topToTop > averageHeight * 0.5;
+    // Check if the current and next tokens vertically overlap significantly.
+    // E.g. "fg:" and "d/dx(f(x)..." might not share exact tops, but they overlap.
+    const minTop = Math.max(t.bounds.top, nextT.bounds.top);
+    const maxBottom = Math.min(t.bounds.top + t.bounds.height, nextT.bounds.top + nextT.bounds.height);
+    const overlap = Math.max(0, maxBottom - minTop);
+    const overlapRatio = Math.max(overlap / t.bounds.height, overlap / nextT.bounds.height);
+    
+    // It's a newline ONLY IF there's no substantial vertical overlap and topToTop is relatively large.
+    const isNewline = topToTop > averageHeight * 0.5 && overlapRatio < 0.3;
     
     // A gap is a paragraph gap if it's significantly larger than the regular line gap for this page
     // Needs to be at least 1.4x, AND 1.3x the median gap.
@@ -73,12 +84,18 @@ export const groupTokensIntoSentences = (tokens) => {
     const nextText = nextT.spokenText.trim();
 
     const hasPunctuation = /[.!?]["']?$/.test(currentText);
-    const endsWithContinuation = /[,:;—-]$/.test(currentText);
-    const nextStartsCapital = /^[A-Z0-9]/.test(nextText);
+    const endsWithContinuation = /[,;—-]$/.test(currentText); // Removed colon so math blocks after introductory text break properly
+    // Allow punctuation to break only if it's not immediately followed by math logic,
+    // though usually math won't follow terminal punctuation without a newline.
+    const nextStartsCapital = /^[A-Z]/.test(nextText); // Remove numbers, so we don't snap on inline equations
 
     const activeTriggers = [];
 
     if (hasPunctuation) {
+        // If it's the end of a sentence visually, it breaks.
+        // We removed the overlapRatio condition because sentences naturally overlap on the same line.
+        // We only want to avoid breaking if the "punctuation" is part of an inline math expression,
+        // but regular sentences ending with . ! ? should always break.
         activeTriggers.push('Punctuation');
     }
 
@@ -94,7 +111,8 @@ export const groupTokensIntoSentences = (tokens) => {
         }
 
         // 3. Significant vertical gap
-        if (isParagraphGap && !endsWithContinuation) {
+        // If it's a paragraph gap (likely a block equation or new paragraph), always break, even after a colon.
+        if (isParagraphGap) {
             activeTriggers.push('Paragraph Gap');
         }
 

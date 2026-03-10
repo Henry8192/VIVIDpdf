@@ -683,45 +683,135 @@ const PDFPage = forwardRef(({
     const allRects = [];
     targetTokens.forEach(tok => {
         if (tok.parts) {
-            tok.parts.forEach(p => allRects.push(p.bounds));
+            tok.parts.forEach(p => allRects.push({ ...p.bounds }));
         }
     });
 
     if (allRects.length === 0) return [];
 
-    const mergedRects = [];
-    let currentRect = { ...allRects[0] };
+    // Sort by reading order (top-to-bottom, left-to-right) rather than just top
+    allRects.sort((a, b) => {
+        // If vertical overlap is significant, consider them on the same line and sort by left
+        const minTop = Math.max(a.top, b.top);
+        const maxBottom = Math.min(a.top + a.height, b.top + b.height);
+        const overlap = Math.max(0, maxBottom - minTop);
+        const minHeight = Math.min(a.height, b.height);
+        
+        if (overlap > minHeight * 0.4) { // Significant vertical overlap
+            return a.left - b.left;
+        }
+        return a.top - b.top;
+    });
+
+    // Group into horizontal lines based on reading order sequence and vertical overlap
+    const lines = [];
+    let currentLine = [allRects[0]];
+    let currentLineExtents = { 
+        top: allRects[0].top, 
+        bottom: allRects[0].top + allRects[0].height 
+    };
 
     for (let i = 1; i < allRects.length; i++) {
-        const nextBounds = allRects[i];
+        const rect = allRects[i];
         
-        const isSameLine = Math.abs(currentRect.top - nextBounds.top) < 
-                           (currentRect.height * MERGE_CONFIG.MAX_VERTICAL_MISALIGNMENT);
+        // Does this rectangle vertically intersect with the current line?
+        const minTop = Math.max(currentLineExtents.top, rect.top);
+        const maxBottom = Math.min(currentLineExtents.bottom, rect.top + rect.height);
+        const overlap = Math.max(0, maxBottom - minTop);
         
-        // Only merge if the rectangles are horizontally close together or overlapping
-        // We do not want to merge a left-column item with a right-column item.
-        const gap = nextBounds.left - (currentRect.left + currentRect.width);
-        const isHorizontallyAdjacent = gap < (currentRect.height * 2.0); // allows a gap of ~2 characters
-        
-        if (isSameLine && isHorizontallyAdjacent) {
-             const newLeft = Math.min(currentRect.left, nextBounds.left);
-             const newTop = Math.min(currentRect.top, nextBounds.top);
-             const newRight = Math.max(currentRect.left + currentRect.width, nextBounds.left + nextBounds.width);
-             const newBottom = Math.max(currentRect.top + currentRect.height, nextBounds.top + nextBounds.height);
-             
-             currentRect = {
-                 left: newLeft,
-                 top: newTop,
-                 width: newRight - newLeft,
-                 height: newBottom - newTop
-             };
+        // We compare against the height of the new rect, 
+        // to handle small superscripts intersecting a tall current line Extent.
+        if (overlap > rect.height * 0.3 || Math.abs(currentLineExtents.top - rect.top) < (currentLineExtents.bottom - currentLineExtents.top) * 0.5) {
+            currentLine.push(rect);
+            // Expand line extents
+            currentLineExtents.top = Math.min(currentLineExtents.top, rect.top);
+            currentLineExtents.bottom = Math.max(currentLineExtents.bottom, rect.top + rect.height);
         } else {
-            mergedRects.push(currentRect);
-            currentRect = { ...nextBounds };
+            lines.push(currentLine);
+            currentLine = [rect];
+            currentLineExtents = { 
+                top: rect.top, 
+                bottom: rect.top + rect.height 
+            };
         }
     }
-    mergedRects.push(currentRect);
-    return mergedRects;
+    lines.push(currentLine);
+
+    // Merge each line horizontally
+    let mergedRects = [];
+    for (const line of lines) {
+        // Sort line strictly left to right
+        line.sort((a, b) => a.left - b.left);
+        
+        // Remove completely duplicate or subset rectangles
+        const filteredLine = [];
+        for (let i = 0; i < line.length; i++) {
+            let isSubset = false;
+            for (let j = 0; j < line.length; j++) {
+                if (i === j) continue;
+                if (line[i].left >= line[j].left && 
+                    line[i].top >= line[j].top && 
+                    line[i].left + line[i].width <= line[j].left + line[j].width && 
+                    line[i].top + line[i].height <= line[j].top + line[j].height) {
+                    isSubset = true;
+                    break;
+                }
+            }
+            if (!isSubset) {
+                filteredLine.push(line[i]);
+            }
+        }
+        if (filteredLine.length === 0) continue;
+
+        let merged = { ...filteredLine[0] };
+        for (let j = 1; j < filteredLine.length; j++) {
+            const nextBounds = filteredLine[j];
+            // If it overlaps or is very close, merge
+            const gap = nextBounds.left - (merged.left + merged.width);
+            
+            // Only merge if horizontally adjacent (prevents merging columns across the page)
+            // Use line height as a generous spacing metric since superscripts might be small but far from the main text
+            const maxAllowedGap = Math.max(merged.height, nextBounds.height) * 3.0;
+            
+            if (gap < maxAllowedGap) {
+                const newLeft = Math.min(merged.left, nextBounds.left);
+                const newTop = Math.min(merged.top, nextBounds.top);
+                const newRight = Math.max(merged.left + merged.width, nextBounds.left + nextBounds.width);
+                const newBottom = Math.max(merged.top + merged.height, nextBounds.top + nextBounds.height);
+                
+                merged = {
+                    left: newLeft,
+                    top: newTop,
+                    width: newRight - newLeft,
+                    height: newBottom - newTop
+                };
+            } else {
+                mergedRects.push(merged);
+                merged = { ...nextBounds };
+            }
+        }
+        mergedRects.push(merged);
+    }
+    
+    // Final check for subset rects across the whole result
+    const finalRects = [];
+    for (let i = 0; i < mergedRects.length; i++) {
+        let isSubset = false;
+        for (let j = 0; j < mergedRects.length; j++) {
+            if (i === j) continue;
+            const a = mergedRects[i];
+            const b = mergedRects[j];
+            if (a.left >= b.left && a.top >= b.top && 
+                a.left + a.width <= b.left + b.width && 
+                a.top + a.height <= b.top + b.height) {
+                isSubset = true;
+                break;
+            }
+        }
+        if (!isSubset) finalRects.push(mergedRects[i]);
+    }
+    
+    return finalRects;
 
   }, [readingMode, getSentenceTokens]);
 
