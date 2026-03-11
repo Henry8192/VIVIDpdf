@@ -606,12 +606,51 @@ const PDFPage = forwardRef(({
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    return candidates.find(t => 
-        mouseX >= t.bounds.left && 
-        mouseX <= t.bounds.right && 
-        mouseY >= t.bounds.top && 
-        mouseY <= t.bounds.bottom
+    // 1. First try to find a precise match inside any of the sub-parts
+    const exactMatch = candidates.find(t => 
+        t.parts && t.parts.some(p => 
+            mouseX >= p.bounds.left && 
+            mouseX <= p.bounds.right && 
+            mouseY >= p.bounds.top && 
+            mouseY <= p.bounds.bottom
+        )
     );
+    if (exactMatch) return exactMatch;
+
+    // 2. Fallback: if clicking on padding, find the token whose part's center is closest
+    let closestToken = null;
+    let minDistance = Infinity;
+    
+    for (const t of candidates) {
+        if (!t.parts) continue;
+        for (const p of t.parts) {
+            const cx = p.bounds.left + p.bounds.width / 2;
+            const cy = p.bounds.top + p.bounds.height / 2;
+            const dist = Math.sqrt((mouseX - cx) ** 2 + (mouseY - cy) ** 2);
+            if (dist < minDistance) {
+                minDistance = dist;
+                closestToken = t;
+            }
+        }
+    }
+    
+    // If somehow no parts existed, fallback to original logic for the first candidate
+    // but prefer smaller boxes if multiple contain the point.
+    if (!closestToken) {
+        return candidates.reduce((best, t) => {
+            const contains = mouseX >= t.bounds.left && 
+                             mouseX <= t.bounds.right && 
+                             mouseY >= t.bounds.top && 
+                             mouseY <= t.bounds.bottom;
+            if (!contains) return best;
+            if (!best) return t;
+            const bestArea = best.bounds.width * best.bounds.height;
+            const tArea = t.bounds.width * t.bounds.height;
+            return tArea < bestArea ? t : best;
+        }, null);
+    }
+    
+    return closestToken;
   };
 
   const getSentenceTokens = useCallback((targetTokenId) => {
