@@ -5,6 +5,9 @@ export const applySkippingRules = (text, speechCustomization) => {
   if (speechCustomization.skipUrls) {
     result = result.replace(/https?:\/\/\S+|www\.\S+/gi, '');
   }
+  if (speechCustomization.skipEmails) {
+    result = result.replace(/[\w.-]+@[\w.-]+\.\w+/gi, '');
+  }
   if (speechCustomization.skipSquare) {
     result = result.replace(/\[[^\]]*]/g, '');
   }

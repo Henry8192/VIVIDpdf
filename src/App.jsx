@@ -29,6 +29,7 @@ const DEFAULT_GLOBALS = {
     layoutMode: 'grid',
     speechCustomization: {
         skipUrls: false,
+        skipEmails: false,
         skipSquare: false,
         skipParens: false,
         skipCurly: false,
@@ -1009,6 +1010,7 @@ const App = () => {
         const removedRanges = [];
         const skippingPatterns = [];
         if (speechCustomizationRef.current.skipUrls) skippingPatterns.push(/https?:\/\/\S+|www\.\S+/gi);
+        if (speechCustomizationRef.current.skipEmails) skippingPatterns.push(/[\w.-]+@[\w.-]+\.\w+/gi);
         if (speechCustomizationRef.current.skipSquare) skippingPatterns.push(/\[[^\]]*\]/g);
         if (speechCustomizationRef.current.skipParens) skippingPatterns.push(/\([^)]*\)/g);
         if (speechCustomizationRef.current.skipCurly) skippingPatterns.push(/\{[^}]*\}/g);
@@ -1309,7 +1311,7 @@ const App = () => {
                     e.preventDefault();
                     handleSmartNavigation(1);
                     break;
-                case 'f':
+                case 'z':
                     e.preventDefault();
                     toggleFitMode();
                     break;
@@ -1321,7 +1323,7 @@ const App = () => {
                     e.preventDefault();
                     setAutoScroll(prev => !prev);
                     break;
-                case 'z': // Focus Mode (Mapped from "H" conflict)
+                case 'f': // Focus Mode (Mapped from "H" conflict)
                     e.preventDefault();
                     setAutoHide(prev => !prev);
                     break;
@@ -1421,12 +1423,12 @@ const App = () => {
                                     <tr><td><kbd>Space</kbd></td><td>Play / Pause</td></tr>
                                     <tr><td><kbd>W</kbd> / <kbd>S</kbd></td><td>Prev / Next Page</td></tr>
                                     <tr><td><kbd>A</kbd> / <kbd>D</kbd></td><td>Prev / Next Sentence</td></tr>
-                                    <tr><td><kbd>F</kbd></td><td>Toggle Fit Mode</td></tr>
+                                    <tr><td><kbd>Z</kbd></td><td>Toggle Fit Mode</td></tr>
                                     <tr><td><kbd>R</kbd></td><td>Switch Reading Mode (Sentence/Word)</td></tr>
                                     <tr><td><kbd>C</kbd></td><td>Open Customize Speech Menu</td></tr>
                                     <tr><td><kbd>M</kbd></td><td>Open Mark Skip Mode</td></tr>
                                     <tr><td><kbd>N</kbd></td><td>Toggle Auto-Scroll</td></tr>
-                                    <tr><td><kbd>Z</kbd></td><td>Toggle Focus Mode (Auto-Hide)</td></tr>
+                                    <tr><td><kbd>F</kbd></td><td>Toggle Focus Mode (Auto-Hide)</td></tr>
                                     <tr><td><kbd>P</kbd></td><td>Enter Page Number Input</td></tr>
                                     <tr><td><kbd>V</kbd></td><td>Open Voice Selection</td></tr>
                                     <tr><td><kbd>H</kbd></td><td>Toggle this Help</td></tr>
@@ -1939,7 +1941,7 @@ const App = () => {
                                                             style={{ width: '100%', fontSize: '11px', resize: 'none' }}
                                                         />
                                                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#666', marginTop: 5 }}>
-                                                            <span>Cost: ${totalCost.toFixed(6)}</span>
+                                                            <span>Cost Tracker: ${totalCost.toFixed(6)} used</span>
                                                             <button onClick={handleResetCost} style={{ background: 'none', border: 'none', color: '#d32f2f', cursor: 'pointer', padding: 0 }}>Reset</button>
                                                         </div>
                                                     </>

@@ -144,6 +144,14 @@ const SpeechCustomizationPanel = ({
                         <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
                             <input 
                                 type="checkbox" 
+                                checked={speechCustomization.skipEmails} 
+                                onChange={(e) => setSpeechCustomization({...speechCustomization, skipEmails: e.target.checked})}
+                            />
+                            Skip Email Addresses
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                            <input 
+                                type="checkbox" 
                                 checked={speechCustomization.skipSquare} 
                                 onChange={(e) => setSpeechCustomization({...speechCustomization, skipSquare: e.target.checked})}
                             />
