@@ -101,7 +101,10 @@ const App = () => {
     // Save AI Config on change
     useEffect(() => {
         localStorage.setItem(LS_AI_CONFIG, JSON.stringify(aiConfig));
+        aiConfigRef.current = aiConfig;
     }, [aiConfig]);
+
+    const aiConfigRef = useRef(aiConfig);
 
     // Live Validation for Gemini Key
     useEffect(() => {
@@ -186,6 +189,10 @@ const App = () => {
 
     // Skip / Zones
     const [isMarkingMode, setIsMarkingMode] = useState(false);
+    const isMarkingModeRef = useRef(isMarkingMode);
+    useEffect(() => {
+        isMarkingModeRef.current = isMarkingMode;
+    }, [isMarkingMode]);
     const [skipZones, setSkipZones] = useState([]);
 
     // Debug
@@ -778,7 +785,7 @@ const App = () => {
         waitingForPageRef.current = null;
 
         // Determine Start logic
-        if (aiConfig.enabled) {
+        if (aiConfigRef.current.enabled) {
             playNextSentenceAI(pageNum, clickedTokenId);
         } else {
             let startIndex = 0;
@@ -917,8 +924,8 @@ const App = () => {
             const imgBase64 = pageRefs.current[pageNum].getWrappedImageForTokens(ids);
 
             if (imgBase64) {
-                const isGemini = aiConfig.model.startsWith('gemini');
-                const apiKeyToUse = isGemini ? aiConfig.geminiApiKey : aiConfig.openAIApiKey;
+                const isGemini = aiConfigRef.current.model.startsWith('gemini');
+                const apiKeyToUse = isGemini ? aiConfigRef.current.geminiApiKey : aiConfigRef.current.openAIApiKey;
 
                 if (apiKeyToUse && apiKeyToUse.trim()) {
                     setOcrLoading(true); // Show Spinner
@@ -927,8 +934,8 @@ const App = () => {
                         imgBase64,
                         textToSpeak,
                         apiKeyToUse,
-                        aiConfig.instructions,
-                        aiConfig.model
+                        aiConfigRef.current.instructions,
+                        aiConfigRef.current.model
                     );
 
                     setOcrLoading(false); // Hide Spinner
@@ -1185,7 +1192,7 @@ const App = () => {
     };
 
     const togglePlay = () => {
-        if (isMarkingMode) return;
+        if (isMarkingModeRef.current) return;
         if (isPlaying) {
             setIsPlaying(false);
             isPlayingRef.current = false;
@@ -1201,7 +1208,7 @@ const App = () => {
             if (!startTokenId && tokens.length > 0) startTokenId = tokens[0].id;
 
             // Route based on AI Config
-            if (aiConfig.enabled) {
+            if (aiConfigRef.current.enabled) {
                 playNextSentenceAI(activePage, startTokenId);
             } else {
                 let startTokens = [];
@@ -1367,7 +1374,7 @@ const App = () => {
                 case 'r': // Reading Mode (Mapped from "M switch reading mode" conflict)
                     e.preventDefault();
                     if (readingMode === 'sentence') {
-                        if (aiConfig.enabled) {
+                        if (aiConfigRef.current.enabled) {
                             showToast("Word Mode is unavailable when AI Fix Mode is enabled.");
                         } else {
                             setReadingMode('word');
@@ -1416,7 +1423,17 @@ const App = () => {
                     e.preventDefault();
                     // If playing, pause first
                     if (isPlaying) togglePlay();
-                    setIsMarkingMode(prev => !prev);
+                    setIsMarkingMode(prev => {
+                        const next = !prev;
+                        isMarkingModeRef.current = next;
+                        return next;
+                    });
+                    break;
+                case 'i': // AI Fix Mode
+                    e.preventDefault();
+                    const nextEnabled = !aiConfigRef.current.enabled;
+                    setAiConfig({ ...aiConfigRef.current, enabled: nextEnabled });
+                    if (nextEnabled) setReadingMode('sentence');
                     break;
                 case 'h': // Help
                     e.preventDefault();
@@ -1488,6 +1505,7 @@ const App = () => {
                                     <tr><td><kbd>F</kbd></td><td>Toggle Focus Mode (Auto-Hide)</td></tr>
                                     <tr><td><kbd>P</kbd></td><td>Enter Page Number Input</td></tr>
                                     <tr><td><kbd>V</kbd></td><td>Open Voice Selection</td></tr>
+                                    <tr><td><kbd>I</kbd></td><td>Toggle AI Fix Mode</td></tr>
                                     <tr><td><kbd>H</kbd></td><td>Toggle this Help</td></tr>
                                 </tbody>
                             </table>
