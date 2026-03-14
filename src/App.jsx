@@ -8,6 +8,7 @@ import { fixTranscriptWithAI, getStoredCost, resetCostUsage, verifyGeminiAPIKey,
 import { applySkippingRules, applyCustomPronunciations } from './speechUtils';
 import { groupTokensIntoSentences } from './parsing';
 import SpeechCustomizationPanel from './SpeechCustomizationPanel';
+import { getVoiceSettings, calculateActualRate } from './voiceSpeedConfig'; // IMPORT VOICE CONFIG
 import './App.css';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -35,7 +36,10 @@ const DEFAULT_GLOBALS = {
         skipCurly: false,
         visualIndicator: false
     },
-    customPronunciations: []
+    customPronunciations: [],
+    languageVoiceCache: {}, // Store per-language preferences
+    textSelectionEnabled: false,
+    offlineFallbackConfig: { language: 'en', voiceURI: '', rate: 1.0 }
 };
 
 const DEFAULT_AI_CONFIG = {
@@ -184,7 +188,12 @@ const App = () => {
 
     // TTS State
     const [voices, setVoices] = useState([]);
+    const [selectedLanguage, setSelectedLanguage] = useState("");
     const [selectedVoiceURI, setSelectedVoiceURI] = useState(globalSettings.voiceURI);
+    const [languageVoiceCache, setLanguageVoiceCache] = useState(globalSettings.languageVoiceCache || {});
+    const [textSelectionEnabled, setTextSelectionEnabled] = useState(globalSettings.textSelectionEnabled ?? false);
+    const [offlineFallbackConfig, setOfflineFallbackConfig] = useState(globalSettings.offlineFallbackConfig || { language: 'en', voiceURI: '', rate: 1.0 });
+    const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
     const [activeTokenId, setActiveTokenId] = useState(null);
 
     // Skip / Zones
@@ -260,12 +269,16 @@ const App = () => {
             autoScroll,
             layoutMode: globalSettings.layoutMode,
             speechCustomization,
-            customPronunciations
+            customPronunciations,
+            languageVoiceCache,
+            textSelectionEnabled,
+            offlineFallbackConfig
         };
         localStorage.setItem(LS_GLOBALS, JSON.stringify(settings));
     }, [selectedVoiceURI, readingMode, rate, highlightEnabled,
         highlightColor, highlightOpacity, autoHide, autoScroll,
-        globalSettings.layoutMode, speechCustomization, customPronunciations
+        globalSettings.layoutMode, speechCustomization, customPronunciations, languageVoiceCache,
+        textSelectionEnabled, offlineFallbackConfig
     ]);
 
     // Sync speech customization state with global settings when it changes
@@ -377,20 +390,49 @@ const App = () => {
         const loadVoices = () => {
             const available = window.speechSynthesis.getVoices();
             setVoices(available);
-            // If we have a saved voiceURI, verify it exists, otherwise default
+
             if (available.length > 0) {
+                // Deduce language of current saved voice (if any exists)
+                let currentLang = "";
+                let validatedVoiceURI = "";
+
                 if (selectedVoiceURI && available.some(v => v.voiceURI === selectedVoiceURI)) {
-                    // Saved voice is valid, keep it
+                    // Saved voice is valid
+                    const v = available.find(vx => vx.voiceURI === selectedVoiceURI);
+                    currentLang = v.lang.split('-')[0]; // generic fallback, e.g. "en" from "en-US"
+                    validatedVoiceURI = selectedVoiceURI;
                 } else {
+                    // Fallback to default
                     const defaultVoice = available.find(v => v.default) || available[0];
-                    setSelectedVoiceURI(defaultVoice?.voiceURI || "");
+                    if (defaultVoice) {
+                        currentLang = defaultVoice.lang.split('-')[0];
+                        validatedVoiceURI = defaultVoice.voiceURI;
+                        setSelectedVoiceURI(validatedVoiceURI);
+                    }
+                }
+
+                if (currentLang && !selectedLanguage) {
+                    setSelectedLanguage(currentLang);
                 }
             }
         };
         loadVoices();
         window.speechSynthesis.onvoiceschanged = loadVoices;
         return () => { window.speechSynthesis.onvoiceschanged = null; };
-    }, [selectedVoiceURI]);
+    }, [selectedVoiceURI, selectedLanguage]);
+
+    // Ensure reading mode is valid for the current voice
+    useEffect(() => {
+        if (!selectedVoiceURI) return;
+        const vSettings = getVoiceSettings(selectedVoiceURI);
+        const targetVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
+        const voiceName = targetVoice ? targetVoice.name : 'This voice';
+
+        if (!vSettings.supportWordMode && readingMode === 'word') {
+            setReadingMode('sentence');
+            showToast(`Word Mode is not supported for ${voiceName}. Switched to Sentence Mode.`);
+        }
+    }, [selectedVoiceURI, readingMode, voices]);
 
     // --- Zoom & Rotation ---
     const updateScale = (newScale) => {
@@ -965,8 +1007,9 @@ const App = () => {
             return;
         }
 
+        const vSettings = getVoiceSettings(selectedVoiceURI);
         const utter = new SpeechSynthesisUtterance(textToSpeak);
-        utter.rate = rateRef.current;
+        utter.rate = calculateActualRate(rateRef.current, vSettings.sensitivity);
         const targetVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
         if (targetVoice) { utter.voice = targetVoice; utter.lang = targetVoice.lang; }
 
@@ -1114,8 +1157,9 @@ const App = () => {
             }
         }
 
+        const vSettings = getVoiceSettings(selectedVoiceURI);
         const utter = new SpeechSynthesisUtterance(script);
-        utter.rate = rateRef.current;
+        utter.rate = calculateActualRate(rateRef.current, vSettings.sensitivity);
         const targetVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
         if (targetVoice) { utter.voice = targetVoice; utter.lang = targetVoice.lang; }
 
@@ -1374,8 +1418,14 @@ const App = () => {
                 case 'r': // Reading Mode (Mapped from "M switch reading mode" conflict)
                     e.preventDefault();
                     if (readingMode === 'sentence') {
+                        const vSettings = getVoiceSettings(selectedVoiceURI);
+                        const targetVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
+                        const voiceName = targetVoice ? targetVoice.name : 'this voice';
+
                         if (aiConfigRef.current.enabled) {
                             showToast("Word Mode is unavailable when AI Fix Mode is enabled.");
+                        } else if (!vSettings.supportWordMode) {
+                            showToast(`Word Mode is not supported by ${voiceName}.`);
                         } else {
                             setReadingMode('word');
                         }
@@ -1725,7 +1775,7 @@ const App = () => {
                 </div>
             )}
 
-            <main className="main-content">
+            <main className="main-content" style={{ userSelect: textSelectionEnabled ? 'text' : 'none' }}>
                 <div className="scroll-viewport" ref={viewportRef}>
                     {isLoading && (
                         <div className="loading-overlay">
@@ -2008,19 +2058,49 @@ const App = () => {
                                                     <span>3.0x</span>
                                                 </div>
                                             </div>
-
-
+                                            <div className="setting-item">
+                                                <label><Icons.Language /> Language</label>
+                                                <select
+                                                    value={selectedLanguage}
+                                                    onChange={e => {
+                                                        const newLang = e.target.value;
+                                                        setSelectedLanguage(newLang);
+                                                        // Check if we have a saved voice for this language
+                                                        if (languageVoiceCache[newLang]) {
+                                                            setSelectedVoiceURI(languageVoiceCache[newLang]);
+                                                        } else {
+                                                            // Pick first voice of this language
+                                                            const firstNewVoice = voices.find(v => v.lang.startsWith(newLang));
+                                                            if (firstNewVoice) setSelectedVoiceURI(firstNewVoice.voiceURI);
+                                                        }
+                                                    }}
+                                                    className="voice-select"
+                                                >
+                                                    {Array.from(new Set(voices.map(v => v.lang.split('-')[0]))).sort().map(lang => (
+                                                        <option key={lang} value={lang}>
+                                                            {new Intl.DisplayNames(['en'], { type: 'language' }).of(lang)}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
 
                                             <div className="setting-item">
                                                 <label><Icons.Voice /> Voice</label>
                                                 <select
                                                     ref={voiceSelectRef}
                                                     value={selectedVoiceURI}
-                                                    onChange={e => setSelectedVoiceURI(e.target.value)}
+                                                    onChange={e => {
+                                                        const uri = e.target.value;
+                                                        setSelectedVoiceURI(uri);
+                                                        // Update cache for this language
+                                                        if (selectedLanguage) {
+                                                            setLanguageVoiceCache(prev => ({ ...prev, [selectedLanguage]: uri }));
+                                                        }
+                                                    }}
                                                     className="voice-select"
                                                 >
-                                                    {voices.map(v => (
-                                                        <option key={v.voiceURI} value={v.voiceURI}>{v.name.slice(0, 24)}...</option>
+                                                    {voices.filter(v => v.lang.startsWith(selectedLanguage)).map(v => (
+                                                        <option key={v.voiceURI} value={v.voiceURI}>{v.name} {v.localService ? '(Offline)' : '(Requires Internet)'}</option>
                                                     ))}
                                                 </select>
                                             </div>
@@ -2032,8 +2112,14 @@ const App = () => {
                                                     <button
                                                         className={`toggle-btn ${readingMode === 'word' ? 'active' : ''}`}
                                                         onClick={() => {
+                                                            const vSettings = getVoiceSettings(selectedVoiceURI);
+                                                            const targetVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
+                                                            const voiceName = targetVoice ? targetVoice.name : 'this voice';
+
                                                             if (aiConfig.enabled && readingMode !== 'word') {
                                                                 showToast("Word Mode is unavailable when AI Fix Mode is enabled.");
+                                                            } else if (!vSettings.supportWordMode && readingMode !== 'word') {
+                                                                showToast(`Word Mode is not supported by ${voiceName}.`);
                                                             } else {
                                                                 setReadingMode('word');
                                                             }
@@ -2074,46 +2160,7 @@ const App = () => {
                                                     />
                                                 </div>
                                             </div>
-                                            <div className="setting-divider"></div>
 
-                                            {/* HIGHLIGHT SETTINGS */}
-                                            <div className="setting-item">
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                                                    <label>Highlighting</label>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={highlightEnabled}
-                                                        onChange={e => setHighlightEnabled(e.target.checked)}
-                                                        style={{ width: 'auto' }}
-                                                    />
-                                                </div>
-
-                                                {highlightEnabled && (
-                                                    <>
-                                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                                                            <label style={{ fontSize: '13px', color: '#555' }}>Color</label>
-                                                            <input
-                                                                type="color"
-                                                                value={highlightColor}
-                                                                onChange={e => setHighlightColor(e.target.value)}
-                                                                style={{ width: '40px', height: '25px', padding: 0, border: 'none' }}
-                                                            />
-                                                        </div>
-                                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                                            <label style={{ fontSize: '13px', color: '#555' }}>Opacity</label>
-                                                            <input
-                                                                type="range"
-                                                                min="0.1" max="1.0" step="0.1"
-                                                                value={highlightOpacity}
-                                                                onChange={e => setHighlightOpacity(Number(e.target.value))}
-                                                                style={{ width: '80px' }}
-                                                            />
-                                                        </div>
-                                                    </>
-                                                )}
-                                            </div>
-
-                                            <div className="setting-divider"></div>
                                             {/* AI CONFIGURATION SECTION */}
                                             <div className="setting-item" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 5, paddingBottom: 10 }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -2211,7 +2258,129 @@ const App = () => {
                                                         </div>
                                                     </>
                                                 )}
-                                            </div>
+                                            </div>                                            {/* ADVANCED OPTIONS */}
+                                            <button
+                                                className="advanced-toggle"
+                                                onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+                                                style={{ background: 'none', border: 'none', color: '#a1a1aa', width: '100%', textAlign: 'left', cursor: 'pointer', padding: '10px 0', fontSize: '13px', fontWeight: 'bold' }}
+                                            >
+                                                Advanced Options {showAdvancedSettings ? '▲' : '▼'}
+                                            </button>
+
+                                            {showAdvancedSettings && (
+                                                <div className="advanced-options-panel" style={{ marginTop: '5px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+
+                                                    {/* TEXT SELECTION SETTING */}
+                                                    <div className="setting-item" style={{ marginBottom: 0 }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                                                            <label>Enable text selection</label>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={textSelectionEnabled}
+                                                                onChange={(e) => setTextSelectionEnabled(e.target.checked)}
+                                                                style={{ width: 'auto' }}
+                                                            />
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="setting-divider" style={{ margin: '5px 0' }}></div>
+
+                                                    {/* HIGHLIGHT SETTINGS */}
+                                                    <div className="setting-item" style={{ marginBottom: 0 }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', width: '100%' }}>
+                                                            <label>Highlighting</label>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={highlightEnabled}
+                                                                onChange={e => setHighlightEnabled(e.target.checked)}
+                                                                style={{ width: 'auto' }}
+                                                            />
+                                                        </div>
+
+                                                        {highlightEnabled && (
+                                                            <>
+                                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', width: '100%' }}>
+                                                                    <label style={{ fontSize: '13px', color: '#555' }}>Color</label>
+                                                                    <input
+                                                                        type="color"
+                                                                        value={highlightColor}
+                                                                        onChange={e => setHighlightColor(e.target.value)}
+                                                                        style={{ width: '40px', height: '25px', padding: 0, border: 'none' }}
+                                                                    />
+                                                                </div>
+                                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                                                                    <label style={{ fontSize: '13px', color: '#555' }}>Opacity</label>
+                                                                    <input
+                                                                        type="range"
+                                                                        min="0.1" max="1.0" step="0.1"
+                                                                        value={highlightOpacity}
+                                                                        onChange={e => setHighlightOpacity(Number(e.target.value))}
+                                                                        style={{ width: '80px' }}
+                                                                    />
+                                                                </div>
+                                                            </>
+                                                        )}
+                                                    </div>
+
+                                                    <div className="setting-divider" style={{ margin: '5px 0' }}></div>
+
+                                                    {/* OFFLINE FALLBACK VOICES */}
+                                                    <div className="setting-item" style={{ flexDirection: 'column', alignItems: 'flex-start', marginBottom: 0 }}>
+                                                        <label style={{ marginBottom: '8px' }}>Offline Fallback Voice</label>
+                                                        <p style={{ fontSize: '11px', color: '#888', marginTop: 0, marginBottom: '10px', lineHeight: '1.4' }}>
+                                                            Select a local voice to use as a fallback if the online speech engine fails to respond.
+                                                        </p>
+
+                                                        {(!voices.find(v => v.voiceURI === selectedVoiceURI) || voices.find(v => v.voiceURI === selectedVoiceURI).localService) ? (
+                                                            <div style={{ padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '6px', fontSize: '12px', color: '#a1a1aa', width: '100%', textAlign: 'center' }}>
+                                                                Fallback not needed. Current voice is already offline.
+                                                            </div>
+                                                        ) : (
+                                                            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                                                <select
+                                                                    value={offlineFallbackConfig.language}
+                                                                    onChange={e => {
+                                                                        const newLang = e.target.value;
+                                                                        const firstVoice = voices.find(v => v.localService && v.lang.startsWith(newLang));
+                                                                        setOfflineFallbackConfig({ ...offlineFallbackConfig, language: newLang, voiceURI: firstVoice ? firstVoice.voiceURI : '' });
+                                                                    }}
+                                                                    className="voice-select"
+                                                                    style={{ width: '100%', padding: '6px' }}
+                                                                >
+                                                                    {Array.from(new Set(voices.filter(v => v.localService).map(v => v.lang.split('-')[0]))).sort().map(lang => (
+                                                                        <option key={lang} value={lang}>
+                                                                            {new Intl.DisplayNames(['en'], { type: 'language' }).of(lang)}
+                                                                        </option>
+                                                                    ))}
+                                                                </select>
+
+                                                                <select
+                                                                    value={offlineFallbackConfig.voiceURI}
+                                                                    onChange={e => setOfflineFallbackConfig({ ...offlineFallbackConfig, voiceURI: e.target.value })}
+                                                                    className="voice-select"
+                                                                    style={{ width: '100%', padding: '6px' }}
+                                                                >
+                                                                    {voices.filter(v => v.localService && v.lang.startsWith(offlineFallbackConfig.language)).map(v => (
+                                                                        <option key={v.voiceURI} value={v.voiceURI}>{v.name}</option>
+                                                                    ))}
+                                                                </select>
+
+                                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                                                                    <label style={{ fontSize: '12px', color: '#aaa' }}>Fallback Speed</label>
+                                                                    <span className="value-badge" style={{ fontSize: '11px', padding: '2px 6px' }}>{offlineFallbackConfig.rate.toFixed(1)}x</span>
+                                                                </div>
+                                                                <input
+                                                                    type="range"
+                                                                    className="styled-slider"
+                                                                    min="0.5" max="3.0" step="0.1"
+                                                                    value={offlineFallbackConfig.rate}
+                                                                    onChange={e => setOfflineFallbackConfig({ ...offlineFallbackConfig, rate: Number(e.target.value) })}
+                                                                />
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )}
 
 
                                         </div>
