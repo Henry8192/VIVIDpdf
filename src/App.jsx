@@ -406,11 +406,11 @@ const App = () => {
                 } else {
                     // Fallback to default
                     const browserLang = (navigator.language || 'en').split('-')[0];
-                    const defaultVoice = available.find(v => v.default && v.lang.startsWith(browserLang)) || 
-                                         available.find(v => v.lang.startsWith(browserLang)) || 
-                                         available.find(v => v.lang.startsWith('en')) || 
-                                         available.find(v => v.default) || 
-                                         available[0];
+                    const defaultVoice = available.find(v => v.default && v.lang.startsWith(browserLang)) ||
+                        available.find(v => v.lang.startsWith(browserLang)) ||
+                        available.find(v => v.lang.startsWith('en')) ||
+                        available.find(v => v.default) ||
+                        available[0];
                     if (defaultVoice) {
                         currentLang = defaultVoice.lang.split('-')[0];
                         validatedVoiceURI = defaultVoice.voiceURI;
@@ -819,7 +819,7 @@ const App = () => {
     };
 
     const registerPageRef = useCallback((num, ref) => { pageRefs.current[num] = ref; }, []);
-    
+
     const getPageRefCallback = useCallback((pageNum) => {
         if (!pageRefCallbacks.current[pageNum]) {
             pageRefCallbacks.current[pageNum] = (r) => registerPageRef(pageNum, r);
@@ -1088,7 +1088,7 @@ const App = () => {
     const scheduleNextBatch = (startPageNum, carryOverTokens, isFirstBatch = false, allowWait = true) => {
         console.log(`[TTS DEBUG] scheduleNextBatch called. startPage: ${startPageNum}, isFirstBatch: ${isFirstBatch}, allowWait: ${allowWait}, isPlaying: ${isPlayingRef.current}`);
         console.log('[TTS DEBUG] scheduleNextBatch - carryOverTokens:', carryOverTokens);
-        if (numPagesRef.current<=0) {
+        if (numPagesRef.current <= 0) {
             console.log(`[ERROR] scheduleNextBatch - numPages is 0 or less. Cannot schedule batch.`, numPagesRef.current);
             return false;
         }
@@ -1230,8 +1230,8 @@ const App = () => {
         console.log(`[TTS DEBUG] scheduleNextBatch - Final script generated. Length: ${script.length}. Empty? ${!script.trim()}`);
 
         if (!script.trim()) {
-            const nextBatchPageNum = nextLeftovers.length > 0 
-                ? nextLeftovers[0].pageNum 
+            const nextBatchPageNum = nextLeftovers.length > 0
+                ? nextLeftovers[0].pageNum
                 : (hasNextPage ? nextPageNum + 1 : startPageNum + 1);
 
             console.log('[TTS DEBUG] scheduleNextBatch - script is empty. nextBatchPageNum:', nextBatchPageNum, 'nextLeftovers:', nextLeftovers, 'hasNextPage:', hasNextPage);
@@ -1259,16 +1259,16 @@ const App = () => {
             leftovers: nextLeftovers
         };
         utter.hasQueuedNext = false;
-        
+
         console.log(`[TTS DEBUG] scheduleNextBatch - Created utterance. nextBatchInfo:`, utter.nextBatchInfo);
 
         utter.onboundary = (event) => {
             if (event.target.generation !== ttsGenerationRef.current) return;
-            if (!isPlayingRef.current) { 
+            if (!isPlayingRef.current) {
                 console.log(`[TTS DEBUG] utterance.onboundary - Cancelled synth because not playing.`);
                 ttsGenerationRef.current += 1;
-                synth.cancel(); 
-                return; 
+                synth.cancel();
+                return;
             }
 
             const currentMap = event.target.audioMap;
@@ -1333,7 +1333,7 @@ const App = () => {
             // If we are currently jumping (manual click), ignore the 'end' event 
             // from the canceled utterance so we don't stop playback.
             if (isJumpingRef.current) return;
-            
+
             setIsVoiceLoading(false);
 
             if (!isPlayingRef.current) {
@@ -1930,83 +1930,98 @@ const App = () => {
                         </div>
                     )}
                     {!pdf ? (
-                        <div className="dashboard-container" style={{ position: 'relative' }}>
-                            {/* Settings Icon in Dashboard */}
-                            <div style={{ position: 'absolute', top: 20, right: 20 }}>
-                                <button className="icon-btn" onClick={() => setShowHomeSettings(true)} title="Storage Settings">
-                                    <Icons.Settings />
-                                </button>
-                            </div>
+                        <div className="dashboard-container" style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
+                            <div style={{ flex: 1, minHeight: '100vh', position: 'relative' }}>
+                                {/* Settings Icon in Dashboard */}
+                                <div style={{ position: 'absolute', top: 0, right: 20, display: 'flex', gap: '10px' }}>
+                                    <button
+                                        className="upload-btn"
+                                        onClick={() => setShowHelp(true)}
+                                        style={{ border: '1px solid #3f3f46', display: 'flex', alignItems: 'center', gap: '8px' }}
+                                    >
+                                        <span style={{ fontSize: '18px' }}>?</span>
+                                        Keyboard Shortcuts
+                                    </button>
+                                    <button
+                                        className="upload-btn"
+                                        onClick={() => setShowHomeSettings(true)}
+                                        title="History Storage Settings"
+                                        style={{ border: '1px solid #3f3f46', display: 'flex', alignItems: 'center', gap: '8px' }}
+                                    >
+                                        <Icons.Settings />
+                                    </button>
 
-                            <div className="empty-placeholder">
-                                <label className="upload-btn main-upload" onClick={() => fileInputRef.current.click()}>
-                                    <Icons.Upload /> Open PDF File
-                                </label>
-                                <p style={{ marginTop: '20px', color: '#9e9e9e', fontSize: '14px' }}>or drag and drop a file here</p>
-                                <button
-                                    className="upload-btn"
-                                    onClick={() => setShowHelp(true)}
-                                    style={{ border: '1px solid #3f3f46' }}
-                                >
-                                    <span style={{ fontSize: '16px', fontWeight: 'bold' }}>?</span>
-                                    (Press H for Help Menu)
-                                </button>
-
-                            </div>
-
-                            {/* RECENT FILES SECTION */}
-                            {recentFiles.length > 0 && (
-                                <div className="recent-files-section">
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #3f3f46', marginBottom: '20px', paddingBottom: '10px' }}>
-                                        <h3 style={{ margin: 0, border: 'none', padding: 0 }}>Recently Opened</h3>
-
-                                        {/* Toggle Button for layout view */}
-                                        <button
-                                            className="icon-btn"
-                                            onClick={() => setGlobalSettings(prev => ({
-                                                ...prev,
-                                                layoutMode: prev.layoutMode === 'grid' ? 'list' : 'grid'
-                                            }))}
-                                            title={`Switch to ${globalSettings.layoutMode === 'grid' ? 'List' : 'Grid'} Layout`}
-                                        >
-                                            {globalSettings.layoutMode === 'grid' ? <Icons.List /> : <Icons.Grid />}
-                                        </button>
-                                    </div>
-
-                                    <div className={globalSettings.layoutMode === 'grid' ? 'recent-grid' : 'recent-list'}>
-                                        {recentFiles.map(file => (
-                                            <div key={file.id} className="recent-card" onClick={() => handleRecentClick(file)}>
-                                                <div className="recent-thumb">
-                                                    {file.thumbnail ? <img src={file.thumbnail} alt="preview" /> : <div className="no-thumb">PDF</div>}
-                                                    {!file.hasBlob && (
-                                                        <div style={{ position: 'absolute', top: '10px', left: '10px', background: 'rgba(0,0,0,0.7)', padding: '6px', borderRadius: '50%', color: '#f87171', display: 'flex' }} title="Content cleared to save space. Click to re-upload.">
-                                                            <Icons.CloudOff style={{ width: '18px', height: '18px' }} />
-                                                        </div>
-                                                    )}
-                                                    <div className="page-badge">Pg {file.lastPage}</div>
-                                                </div>
-                                                <div className="recent-info" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                    <div style={{ flex: 1, minWidth: 0 }}>
-                                                        <div className="recent-name" title={file.name}>{file.name}</div>
-                                                        <div className="recent-date">
-                                                            {new Date(file.lastOpened).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                                                        </div>
-                                                    </div>
-                                                    <button
-                                                        className="icon-btn delete-recent-btn"
-                                                        onClick={(e) => handleDeleteRecent(e, file.id)}
-                                                        title="Remove Record"
-                                                        style={{ flexShrink: 0, padding: '4px', width: 'auto', height: 'auto', marginLeft: '8px' }}
-                                                    >
-                                                        <Icons.Trash style={{ width: '16px', height: '16px' }} />
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
                                 </div>
-                            )}
 
+                                <div className="empty-placeholder">
+                                    <label className="upload-btn main-upload" onClick={() => fileInputRef.current.click()}>
+                                        <Icons.Upload /> Open PDF File
+                                    </label>
+                                    <p style={{ marginTop: '20px', color: '#9e9e9e', fontSize: '14px' }}>or drag and drop a file here</p>
+
+
+                                </div>
+
+                                {/* RECENT FILES SECTION */}
+                                {recentFiles.length > 0 && (
+                                    <div className="recent-files-section">
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #3f3f46', marginBottom: '20px', paddingBottom: '10px' }}>
+                                            <h3 style={{ margin: 0, border: 'none', padding: 0 }}>Recently Opened</h3>
+
+                                            {/* Toggle Button for layout view */}
+                                            <button
+                                                className="icon-btn"
+                                                onClick={() => setGlobalSettings(prev => ({
+                                                    ...prev,
+                                                    layoutMode: prev.layoutMode === 'grid' ? 'list' : 'grid'
+                                                }))}
+                                                title={`Switch to ${globalSettings.layoutMode === 'grid' ? 'List' : 'Grid'} Layout`}
+                                            >
+                                                {globalSettings.layoutMode === 'grid' ? <Icons.List /> : <Icons.Grid />}
+                                            </button>
+                                        </div>
+
+                                        <div className={globalSettings.layoutMode === 'grid' ? 'recent-grid' : 'recent-list'}>
+                                            {recentFiles.map(file => (
+                                                <div key={file.id} className="recent-card" onClick={() => handleRecentClick(file)}>
+                                                    <div className="recent-thumb">
+                                                        {file.thumbnail ? <img src={file.thumbnail} alt="preview" /> : <div className="no-thumb">PDF</div>}
+                                                        {!file.hasBlob && (
+                                                            <div style={{ position: 'absolute', top: '10px', left: '10px', background: 'rgba(0,0,0,0.7)', padding: '6px', borderRadius: '50%', color: '#f87171', display: 'flex' }} title="Content cleared to save space. Click to re-upload.">
+                                                                <Icons.CloudOff style={{ width: '18px', height: '18px' }} />
+                                                            </div>
+                                                        )}
+                                                        <div className="page-badge">Pg {file.lastPage}</div>
+                                                    </div>
+                                                    <div className="recent-info" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                                            <div className="recent-name" title={file.name}>{file.name}</div>
+                                                            <div className="recent-date">
+                                                                {new Date(file.lastOpened).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            className="icon-btn delete-recent-btn"
+                                                            onClick={(e) => handleDeleteRecent(e, file.id)}
+                                                            title="Remove Record"
+                                                            style={{ flexShrink: 0, padding: '4px', width: 'auto', height: 'auto', marginLeft: '8px' }}
+                                                        >
+                                                            <Icons.Trash style={{ width: '16px', height: '16px' }} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div style={{ marginTop: '50px', paddingBottom: '20px', textAlign: 'center', color: '#9e9e9e', fontSize: '13px', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                                <span>VIVIDpdf is a free and opensource software. <em><a href="https://www.gnu.org/philosophy/free-sw.en.html" target="_blank">Free as in freedom</a></em>.</span>
+                                <a href="https://github.com/Nathan903/VIVIDpdf" target="_blank" rel="noopener noreferrer" style={{ color: '#a1a1aa', textDecoration: 'none', display: 'flex', alignItems: 'center', transition: 'color 0.2s' }} onMouseOver={e => e.currentTarget.style.color = '#6366f1'} onMouseOut={e => e.currentTarget.style.color = '#a1a1aa'} title="View on GitHub">
+                                    <Icons.Github style={{ width: '20px', height: '20px' }} />
+                                </a>
+                            </div>
                         </div>
                     ) : (
                         <>
@@ -2152,14 +2167,14 @@ const App = () => {
                                     <Icons.Upload />
                                 </button>
 
-
+                                {/* 
                                 <button
                                     className={`icon-btn ${showHelp ? 'active' : ''}`}
                                     onClick={() => setShowHelp(!showHelp)}
                                     title="Shortcuts (H)"
                                 >
                                     <span style={{ fontSize: '18px', fontWeight: 'bold' }}>?</span>
-                                </button>
+                                </button> */}
 
                                 <div style={{ position: 'relative' }}>
                                     <button
@@ -2219,10 +2234,11 @@ const App = () => {
                                                             // fallback to lang code
                                                         }
                                                         return (
-                                                        <option key={lang} value={lang}>
-                                                            {displayName}
-                                                        </option>
-                                                    )})}
+                                                            <option key={lang} value={lang}>
+                                                                {displayName}
+                                                            </option>
+                                                        )
+                                                    })}
                                                 </select>
                                             </div>
 
@@ -2497,10 +2513,11 @@ const App = () => {
                                                                             // fallback to lang code
                                                                         }
                                                                         return (
-                                                                        <option key={lang} value={lang}>
-                                                                            {displayName}
-                                                                        </option>
-                                                                    )})}
+                                                                            <option key={lang} value={lang}>
+                                                                                {displayName}
+                                                                            </option>
+                                                                        )
+                                                                    })}
                                                                 </select>
 
                                                                 <select
@@ -2548,62 +2565,7 @@ const App = () => {
                 </div>
             )}
 
-            <style>{`
-          .modal-overlay {
-              position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-              background: rgba(0,0,0,0.6); z-index: 10000;
-              display: flex; align-items: center; justify-content: center;
-              backdrop-filter: blur(2px);
-          }
-          .modal-content {
-              background: #18181b; width: 500px; max-width: 90%;
-              border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-              overflow: hidden;
-              color: #e4e4e7;
-              border: 1px solid #3f3f46;
-          }
-          .modal-header {
-              padding: 15px 20px; border-bottom: 1px solid #3f3f46;
-              display: flex; justify-content: space-between; align-items: center;
-          }
-          .modal-header h3 { margin: 0; font-size: 18px; }
-          .modal-body { padding: 20px; }
-          
-          .toast-notification {
-              position: fixed;
-              bottom: 20px;
-              left: 50%;
-              transform: translateX(-50%);
-              background: #f44336;
-              color: white;
-              padding: 10px 20px;
-              border-radius: 8px;
-              box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-              z-index: 100000;
-              animation: fadein 0.3s, fadeout 0.3s 2.7s;
-              font-size: 14px;
-              pointer-events: none;
-          }
-          @keyframes fadein {
-              from { bottom: 0; opacity: 0; }
-              to { bottom: 20px; opacity: 1; }
-          }
-          @keyframes fadeout {
-              from { bottom: 20px; opacity: 1; }
-              to { bottom: 0; opacity: 0; }
-          }
-          
-          .shortcuts-table { width: 100%; border-collapse: collapse; }
-          .shortcuts-table td { padding: 8px 0; border-bottom: 1px solid #3f3f46; font-size: 14px; }
-          .shortcuts-table tr:last-child td { border-bottom: none; }
-          kbd {
-              background-color: #27272a; border: 1px solid #3f3f46;
-              border-radius: 4px; box-shadow: 0 1px 0 rgba(0,0,0,0.2);
-              color: #e4e4e7; display: inline-block; font-size: 11px;
-              line-height: 1.4; margin: 0 2px; padding: 2px 6px;
-              white-space: nowrap; font-family: monospace;
-          }
-      `}</style>
+
         </div>
     );
 };
