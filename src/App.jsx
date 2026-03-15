@@ -5,7 +5,7 @@ import PDFPage from './PDFPage';
 import { Icons } from './Icons';
 import { saveFileRecord, getRecentFiles, updateFileMeta, getFileId, deleteFileRecord, getFileRecord, getStorageInfo, deleteBlobs } from './db';
 import { fixTranscriptWithAI, getStoredCost, resetCostUsage, verifyGeminiAPIKey, verifyOpenAIApiKey } from './aiService'; // IMPORT AI SERVICE
-import { applySkippingRules, applyCustomPronunciations } from './speechUtils';
+import { applySkippingRules, applyCustomPronunciations, containsSkippableItem } from './speechUtils';
 import { groupTokensIntoSentences } from './parsing';
 import SpeechCustomizationPanel from './SpeechCustomizationPanel';
 import { getVoiceSettings, calculateActualRate } from './voiceSpeedConfig'; // IMPORT VOICE CONFIG
@@ -170,6 +170,16 @@ const App = () => {
     const [speechCustomization, setSpeechCustomization] = useState(globalSettings.speechCustomization || DEFAULT_GLOBALS.speechCustomization);
     const [customPronunciations, setCustomPronunciations] = useState(globalSettings.customPronunciations || DEFAULT_GLOBALS.customPronunciations);
     const [showCustomSpeech, setShowCustomSpeech] = useState(false);
+    const [pulseCustomizeBtn, setPulseCustomizeBtn] = useState(false);
+
+    const toggleCustomSpeech = () => {
+        setShowCustomSpeech(prev => !prev);
+        // If user ever opens the customize speech menu, never display the hint again
+        if (!showCustomSpeech) {
+            localStorage.setItem('pdf_reader_hint_skip_dismissed', 'true');
+            setPulseCustomizeBtn(false);
+        }
+    };
 
     // Navigation
     const [numPages, setNumPages] = useState(-999);
@@ -208,6 +218,21 @@ const App = () => {
 
     // UI State
     const [showSettings, setShowSettings] = useState(false);
+    const [settingsInteracted, setSettingsInteracted] = useState(() => {
+        return localStorage.getItem('vividpdf_settings_interacted') === 'true';
+    });
+    const settingsOpenedRef = useRef(false);
+
+    // Track settings interaction sequence
+    useEffect(() => {
+        if (showSettings) {
+            settingsOpenedRef.current = true;
+        } else if (settingsOpenedRef.current) {
+            setSettingsInteracted(true);
+            localStorage.setItem('vividpdf_settings_interacted', 'true');
+        }
+    }, [showSettings]);
+
     const [showHelp, setShowHelp] = useState(false);
     const [recentFiles, setRecentFiles] = useState([]);
 
@@ -244,11 +269,107 @@ const App = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [darkMode, setDarkMode] = useState(false);
     const [toast, setToast] = useState(null);
+    const toastTimeoutRef = useRef(null);
+    const [pulsePlayBtn, setPulsePlayBtn] = useState(false);
+    const [pulseSettingsBtn, setPulseSettingsBtn] = useState(false);
+    const [pulseSkipZoneBtn, setPulseSkipZoneBtn] = useState(false);
 
-    const showToast = (message) => {
-        setToast(message);
-        setTimeout(() => setToast(null), 5000);
+    // Stop pulsing when reading starts
+    useEffect(() => {
+        if (isPlaying) setPulsePlayBtn(false);
+    }, [isPlaying]);
+
+    // Stop pulsing settings when settings are opened
+    useEffect(() => {
+        if (showSettings) setPulseSettingsBtn(false);
+    }, [showSettings]);
+
+    // Stop pulsing skip zone when marking mode starts
+    useEffect(() => {
+        if (isMarkingMode) setPulseSkipZoneBtn(false);
+    }, [isMarkingMode]);
+
+    // Show a one-time hint when entering mark skip zone mode for the first time
+    useEffect(() => {
+        if (
+            isMarkingMode &&
+            !localStorage.getItem('vividpdf_first_time_mark_skip_hint_shown')
+        ) {
+            showToast("💡 Click and drag to draw a rectangle on a page number to skip that area.", "info");
+            localStorage.setItem('vividpdf_first_time_mark_skip_hint_shown', 'true');
+        }
+    }, [isMarkingMode]);
+
+    const showToast = (message, type = 'error') => {
+        setToast({ message, type });
+        if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+        toastTimeoutRef.current = setTimeout(() => setToast(null), 8000);
     };
+
+    // --- User Hint Logic ---
+    const checkAndTriggerSkipHint = (text) => {
+        if (localStorage.getItem('pdf_reader_hint_skip_dismissed') === 'true') return;
+
+        let count = parseInt(localStorage.getItem('pdf_reader_hint_skip_count') || '0', 10);
+        if (count >= 3) {
+            localStorage.setItem('pdf_reader_hint_skip_dismissed', 'true');
+            return;
+        }
+
+        const today = new Date().toDateString();
+        const lastDate = localStorage.getItem('pdf_reader_hint_skip_last_date');
+        if (lastDate === today) return;
+
+        if (containsSkippableItem(text)) {
+            console.log("[Hint Triggered] Detected skippable content. Count:", count + 1);
+            showToast("💡 Reading too many links? Press 'C' or click the pencil icon to auto-skip elements.", "info");
+            setPulseCustomizeBtn(true);
+
+            localStorage.setItem('pdf_reader_hint_skip_count', (count + 1).toString());
+            localStorage.setItem('pdf_reader_hint_skip_last_date', today);
+        }
+    };
+    const checkAndTriggerSkipHintRef = useRef(checkAndTriggerSkipHint);
+    useEffect(() => {
+        checkAndTriggerSkipHintRef.current = checkAndTriggerSkipHint;
+    });
+
+    // --- First-time User Hint ---
+    useEffect(() => {
+        if (pdf && !localStorage.getItem('vividpdf_first_time_viewer_hint_shown')) {
+            // Delay slightly to ensure PDF is rendered or at least visible
+            const timer = setTimeout(() => {
+                showToast("💡 Click any word to start hearing.", "info");
+                setPulsePlayBtn(true);
+                localStorage.setItem('vividpdf_first_time_viewer_hint_shown', 'true');
+            }, 1000);
+            return () => clearTimeout(timer);
+        }
+    }, [pdf]);
+
+    // --- First-time Settings & Skip Zone Hints ---
+    useEffect(() => {
+        if (isPlaying) {
+            // Settings Hint
+            if (!localStorage.getItem('vividpdf_first_time_settings_hint_shown')) {
+                const timer = setTimeout(() => {
+                    showToast("💡 Click the gear icon to change speed and voice.", "info");
+                    setPulseSettingsBtn(true);
+                    localStorage.setItem('vividpdf_first_time_settings_hint_shown', 'true');
+                }, 8000); // 8 seconds after starting play
+                return () => clearTimeout(timer);
+            }
+            // Skip Zone Hint
+            if (settingsInteracted && !localStorage.getItem('vividpdf_first_time_skip_zone_hint_shown')) {
+                const timer = setTimeout(() => {
+                    showToast("💡 Click the mark skip area button to mark headers/footers to skip.", "info");
+                    setPulseSkipZoneBtn(true);
+                    localStorage.setItem('vividpdf_first_time_skip_zone_hint_shown', 'true');
+                }, 8000); // 16 seconds after starting play
+                return () => clearTimeout(timer);
+            }
+        }
+    }, [isPlaying, settingsInteracted]);
 
     useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
     useEffect(() => { numPagesRef.current = numPages; }, [numPages]);
@@ -440,7 +561,7 @@ const App = () => {
 
         if (!vSettings.supportWordMode && readingMode === 'word') {
             setReadingMode('sentence');
-            showToast(`Word Mode is not supported for ${voiceName}. Switched to Sentence Mode.`);
+            showToast(`Word Mode is not supported for ${voiceName}. Switched to Sentence Mode.`, "warning");
         }
     }, [selectedVoiceURI, readingMode, voices]);
 
@@ -496,6 +617,13 @@ const App = () => {
     // --- Core Logic ---
     const handleAddSkipZone = useCallback((zone) => {
         setSkipZones(prev => [...prev, zone]);
+
+        // Show a completion hint after the first time drawing a rectangle
+        if (!localStorage.getItem('vividpdf_first_time_mark_skip_complete_hint_shown')) {
+            showToast("💡 Click the mark skip area button again to complete marking.", "info");
+            setPulseSkipZoneBtn(true);
+            localStorage.setItem('vividpdf_first_time_mark_skip_complete_hint_shown', 'true');
+        }
     }, []);
 
     const handleRemoveSkipZone = useCallback((id) => {
@@ -1012,7 +1140,6 @@ const App = () => {
         if (prefetchInProgress.current.has(cacheKey)) return;
 
         let textToSpeak = info.tokens.map(t => t.spokenText).join(' ');
-        textToSpeak = applySkippingRules(textToSpeak, speechCustomizationRef.current);
         if (!textToSpeak.trim()) return;
 
         const ids = info.tokens.map(t => t.id);
@@ -1090,6 +1217,7 @@ const App = () => {
         if (!cached || !cached.transcript) return false; // Not cached yet, can't pre-queue
 
         let textToSpeak = cached.transcript;
+        textToSpeak = applySkippingRules(textToSpeak, speechCustomizationRef.current);
         textToSpeak = applyCustomPronunciations(textToSpeak, customPronunciationsRef.current);
 
         if (!textToSpeak.trim()) {
@@ -1113,6 +1241,7 @@ const App = () => {
             setActiveTokenId(firstTokenId);
             if (pageNum !== activePageRef.current) setActivePage(pageNum);
             handleSmartScroll(pageNum, firstTokenId);
+            checkAndTriggerSkipHintRef.current(textToSpeak);
         };
 
         utter.onend = (event) => {
@@ -1194,7 +1323,6 @@ const App = () => {
         handleSmartScroll(pageNum, firstTokenId);
 
         let textToSpeak = sentenceTokens.map(t => t.spokenText).join(' ');
-        textToSpeak = applySkippingRules(textToSpeak, speechCustomizationRef.current);
 
         // Fire-and-forget: start prefetching the next 3 sentences in parallel with
         // the live AI fetch below — so N+1 is likely cached by the time N finishes playing
@@ -1252,6 +1380,7 @@ const App = () => {
         }
         // ---------------------------
 
+        textToSpeak = applySkippingRules(textToSpeak, speechCustomizationRef.current);
         textToSpeak = applyCustomPronunciations(textToSpeak, customPronunciationsRef.current);
 
         console.log(`[TTS DEBUG] playNextSentenceAI - Final textToSpeak: "${textToSpeak}"`);
@@ -1278,6 +1407,7 @@ const App = () => {
         utter.onstart = (event) => {
             if (event.target.generation !== ttsGenerationRef.current) return;
             console.log(`[TTS DEBUG] playNextSentenceAI - utterance start`);
+            checkAndTriggerSkipHintRef.current(textToSpeak);
             // Pre-queue all available cached sentences right now to eliminate
             // gaps with online voices (gives browser max time to pre-synthesize)
             if (!event.target.hasQueuedNext) {
@@ -1522,12 +1652,21 @@ const App = () => {
 
                 // Execute Smart Scroll Logic
                 handleSmartScroll(pageNum, tokenId);
+
+                // --- CHECK USER HINT AROUND CURRENT WORD ---
+                const chunkStart = Math.max(0, entry.start - 10);
+                const chunkEnd = Math.min(script.length, entry.end + 40);
+                const textChunk = script.substring(chunkStart, chunkEnd);
+                checkAndTriggerSkipHintRef.current(textChunk);
             }
         };
 
         utter.onstart = (event) => {
             if (event.target.generation !== ttsGenerationRef.current) return;
             console.log(`[TTS DEBUG] utterance.onstart - Started utterance.`);
+            if (forceSentenceMode) {
+                checkAndTriggerSkipHintRef.current(script);
+            }
             setIsVoiceLoading(false);
             if (!isPlayingRef.current) return;
 
@@ -1857,7 +1996,7 @@ const App = () => {
                     break;
                 case 'c': // Customize Speech
                     e.preventDefault();
-                    setShowCustomSpeech(prev => !prev);
+                    toggleCustomSpeech();
                     break;
                 case 'm': // Mark Skip (Mapped from "M Mark Skip")
                     e.preventDefault();
@@ -1865,6 +2004,7 @@ const App = () => {
                     if (isPlaying) togglePlay();
                     setIsMarkingMode(prev => {
                         const next = !prev;
+                        if (!next) setPulseSkipZoneBtn(false);
                         isMarkingModeRef.current = next;
                         return next;
                     });
@@ -2189,9 +2329,9 @@ const App = () => {
 
                                 <div className="empty-placeholder">
                                     <label className="upload-btn main-upload" onClick={() => fileInputRef.current.click()}>
-                                        <Icons.Upload /> Open PDF File
+                                        <Icons.Upload /> Open PDF file
                                     </label>
-                                    <p style={{ marginTop: '20px', color: '#9e9e9e', fontSize: '14px' }}>or drag and drop a file here</p>
+                                    <p style={{ marginTop: '20px', color: '#9e9e9e', fontSize: '14px' }}>or drag & drop a PDF here</p>
 
 
                                 </div>
@@ -2200,7 +2340,7 @@ const App = () => {
                                 {recentFiles.length > 0 && (
                                     <div className="recent-files-section">
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #3f3f46', marginBottom: '20px', paddingBottom: '10px' }}>
-                                            <h3 style={{ margin: 0, border: 'none', padding: 0 }}>Recently Opened</h3>
+                                            <p style={{ margin: 0, border: 'none', padding: 0 }}>Recently opened</p>
 
                                             {/* Toggle Button for layout view */}
                                             <button
@@ -2252,10 +2392,12 @@ const App = () => {
 
                             <div style={{ textAlign: 'center', fontSize: '13px', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
                                 <span>All your files are processed and stored locally. No data is ever uploaded to the internet.</span>
-                                <span style={{ color: '#808080ff' }}>VIVIDpdf is a free and opensource software. <em><a href="https://www.gnu.org/philosophy/free-sw.en.html" target="_blank">Free as in freedom</a></em>.</span>
+                                <br></br>
                                 <a href="https://github.com/Nathan903/VIVIDpdf" target="_blank" rel="noopener noreferrer" style={{ color: '#a1a1aa', textDecoration: 'none', display: 'flex', alignItems: 'center', transition: 'color 0.2s' }} onMouseOver={e => e.currentTarget.style.color = '#6366f1'} onMouseOut={e => e.currentTarget.style.color = '#a1a1aa'} title="View on GitHub">
                                     <Icons.Github style={{ width: '20px', height: '20px' }} />
                                 </a>
+                                <span style={{ color: '#808080ff' }}>VIVIDpdf is a free and opensource software. <em><a href="https://www.gnu.org/philosophy/free-sw.en.html" target="_blank">Free as in freedom</a></em>.</span>
+
                             </div>
                         </div>
                     ) : (
@@ -2317,7 +2459,7 @@ const App = () => {
                         <div className="player-bar">
                             {/* LEFT: Playback & Navigation */}
                             <div className="section-left">
-                                <button className="icon-btn" onClick={togglePlay} disabled={isMarkingMode} style={{ opacity: isMarkingMode ? 0.5 : 1 }} title="Play/Pause (Space)">
+                                <button className={`icon-btn ${pulsePlayBtn ? 'pulse-yellow' : ''}`} onClick={togglePlay} disabled={isMarkingMode} style={{ opacity: isMarkingMode ? 0.5 : 1 }} title="Play/Pause (Space)">
                                     {isPlaying ? <Icons.Pause /> : <Icons.Play />}
                                 </button>
                                 <div className="divider-vertical"></div>
@@ -2370,8 +2512,8 @@ const App = () => {
                             <div className="section-right">
                                 <div style={{ position: 'relative' }}>
                                     <button
-                                        className={`icon-btn ${showCustomSpeech ? 'active' : ''}`}
-                                        onClick={() => setShowCustomSpeech(!showCustomSpeech)}
+                                        className={`icon-btn ${showCustomSpeech ? 'active' : ''} ${pulseCustomizeBtn ? 'pulse-yellow' : ''}`}
+                                        onClick={toggleCustomSpeech}
                                         title="Customize Speech (C)"
                                     >
                                         <Icons.Pencil />
@@ -2379,8 +2521,12 @@ const App = () => {
                                 </div>
 
                                 <button
-                                    className={`icon-btn ${isMarkingMode ? 'active-danger' : ''}`}
-                                    onClick={() => { if (!isMarkingMode && isPlaying) togglePlay(); setIsMarkingMode(!isMarkingMode); }}
+                                    className={`icon-btn ${isMarkingMode ? 'active-danger' : ''} ${pulseSkipZoneBtn ? 'pulse-yellow' : ''}`}
+                                    onClick={() => {
+                                        if (!isMarkingMode && isPlaying) togglePlay();
+                                        if (isMarkingMode) setPulseSkipZoneBtn(false);
+                                        setIsMarkingMode(!isMarkingMode);
+                                    }}
                                     title="Mark Skip Area (M)"
                                 >
                                     <Icons.Crop />
@@ -2415,16 +2561,16 @@ const App = () => {
                                 <div style={{ position: 'relative' }}>
                                     <button
                                         ref={settingsBtnRef}
-                                        className={`icon-btn ${showSettings ? 'active' : ''}`}
+                                        className={`icon-btn ${showSettings ? 'active' : ''} ${pulseSettingsBtn ? 'pulse-yellow' : ''}`}
                                         onClick={() => setShowSettings(!showSettings)}
-                                        title="Settings"
+                                        title="Settings (S)"
                                     >
                                         <Icons.Settings />
                                     </button>
 
                                     {showSettings && (
                                         <div className="settings-popup" ref={settingsRef}>
-                                            <div className="settings-header">Reading Settings</div>
+                                            {/* <div className="settings-header">Reading Settings</div> */}
 
 
                                             <div className="setting-item">
@@ -2796,13 +2942,13 @@ const App = () => {
 
             {/* TOAST SYSTEM */}
             {toast && (
-                <div className="toast-notification">
-                    {toast}
+                <div key={toast.message} className={`toast-notification toast-${toast.type}`}>
+                    {toast.message}
                 </div>
             )}
 
-            <BugReport 
-                darkMode={darkMode} 
+            <BugReport
+                darkMode={darkMode}
                 appContext={{
                     readingMode,
                     rate,

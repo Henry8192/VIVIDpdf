@@ -7,7 +7,7 @@ import {
   mergeRawTokens, 
   generateDebugImagesFromCanvas 
 } from './parsing';
-import { buildPronunciationRegex } from './speechUtils';
+import { buildPronunciationRegex, URL_REGEX } from './speechUtils';
 
 const PDFPage = forwardRef(({
   pdfDoc,
@@ -276,6 +276,8 @@ const PDFPage = forwardRef(({
         const allTexts = allTokensRef.current.map(t => t.text || '');
         const joined = allTexts.join(' ');
         const patterns = [];
+        if (speechCustomization.skipUrls) patterns.push(URL_REGEX);
+        if (speechCustomization.skipEmails) patterns.push(/[\w.-]+@[\w.-]+\.\w+/gi);
         if (speechCustomization.skipSquare) patterns.push(/\[[^\]]*\]/g);
         if (speechCustomization.skipParens) patterns.push(/\([^)]*\)/g);
         if (speechCustomization.skipCurly) patterns.push(/\{[^}]*\}/g);
@@ -297,7 +299,9 @@ const PDFPage = forwardRef(({
                     const mStart = m.index;
                     const mEnd = m.index + m[0].length;
                     for (let i = 0; i < tokenRanges.length; i++) {
-                        if (tokenRanges[i][0] >= mStart && tokenRanges[i][0] < mEnd) {
+                        const [tStart, tEnd] = tokenRanges[i];
+                        // Check for any overlap between token range and match range
+                        if (Math.max(tStart, mStart) < Math.min(tEnd, mEnd)) {
                             bracketAffected.add(allTokensRef.current[i].id);
                         }
                     }
@@ -320,21 +324,27 @@ const PDFPage = forwardRef(({
 
         // Check if token is affected by speech rules (for visual indicator)
         let isSpeechAffected = false;
+        let isBlanked = false;
         if (!isSkipped && speechCustomization.visualIndicator) {
             const word = t.text || '';
-            // Check skip rules (URL per-token, brackets via pre-computed set)
-            if (speechCustomization.skipUrls && /^(https?:\/\/|www\.)/i.test(word)) {
+            
+            if (bracketAffected.has(t.id)) {
                 isSpeechAffected = true;
-            }
-            if (!isSpeechAffected && bracketAffected.has(t.id)) {
-                isSpeechAffected = true;
+                isBlanked = true;
             }
             // Check pronunciation replacements
             if (!isSpeechAffected && customPronunciations.length > 0) {
-                isSpeechAffected = customPronunciations.some(rule => {
+                customPronunciations.some(rule => {
                     const re = buildPronunciationRegex(rule, false);
                     if (!re) return false;
-                    return re.test(word);
+                    if (re.test(word)) {
+                        isSpeechAffected = true;
+                        if (!rule.replacement || rule.replacement.trim() === '') {
+                            isBlanked = true;
+                        }
+                        return true;
+                    }
+                    return false;
                 });
             }
         }
@@ -352,7 +362,7 @@ const PDFPage = forwardRef(({
 
         // Track affected tokens for blackout overlays
         if (isSpeechAffected) {
-            affectedTokens.push(t);
+            affectedTokens.push({ token: t, isBlanked });
         }
 
         if (!isSkipped) {
@@ -394,8 +404,8 @@ const PDFPage = forwardRef(({
 
     // Create deemphasize overlays for speech-affected tokens
     if (affectedTokens.length > 0 && containerRef.current) {
-        affectedTokens.forEach(t => {
-            t.parts.forEach(p => {
+        affectedTokens.forEach(item => {
+            item.token.parts.forEach(p => {
                 const overlay = document.createElement('div');
                 const padding = 2; // Slight padding to match highlight sizing better
                 overlay.style.position = 'absolute';
@@ -407,6 +417,18 @@ const PDFPage = forwardRef(({
                 overlay.style.pointerEvents = 'none';
                 overlay.style.zIndex = '3';
                 overlay.style.borderRadius = '2px';
+
+                if (item.isBlanked) {
+                    const line = document.createElement('div');
+                    line.style.position = 'absolute';
+                    line.style.top = '50%';
+                    line.style.left = '0';
+                    line.style.width = '100%';
+                    line.style.height = '1px';
+                    line.style.backgroundColor = 'rgba(0, 0, 0, 0.4)';
+                    overlay.appendChild(line);
+                }
+
                 containerRef.current.appendChild(overlay);
                 blackoutOverlaysRef.current.push(overlay);
             });
