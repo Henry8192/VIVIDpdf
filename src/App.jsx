@@ -1,9 +1,9 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker?url';
 import PDFPage from './PDFPage';
 import { Icons } from './Icons';
-import { initDB, saveFileRecord, getRecentFiles, updateFileMeta, getFileId, deleteFileRecord, getFileRecord, getStorageInfo, deleteBlobs } from './db';
+import { saveFileRecord, getRecentFiles, updateFileMeta, getFileId, deleteFileRecord, getFileRecord, getStorageInfo, deleteBlobs } from './db';
 import { fixTranscriptWithAI, getStoredCost, resetCostUsage, verifyGeminiAPIKey, verifyOpenAIApiKey } from './aiService'; // IMPORT AI SERVICE
 import { applySkippingRules, applyCustomPronunciations } from './speechUtils';
 import { groupTokensIntoSentences } from './parsing';
@@ -195,6 +195,7 @@ const App = () => {
     const [offlineFallbackConfig, setOfflineFallbackConfig] = useState(globalSettings.offlineFallbackConfig || { language: 'en', voiceURI: '', rate: 1.0 });
     const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
     const [activeTokenId, setActiveTokenId] = useState(null);
+    const [isVoiceLoading, setIsVoiceLoading] = useState(false);
 
     // Skip / Zones
     const [isMarkingMode, setIsMarkingMode] = useState(false);
@@ -203,9 +204,6 @@ const App = () => {
         isMarkingModeRef.current = isMarkingMode;
     }, [isMarkingMode]);
     const [skipZones, setSkipZones] = useState([]);
-
-    // Debug
-    const [debugImages, setDebugImages] = useState([]);
 
     // UI State
     const [showSettings, setShowSettings] = useState(false);
@@ -220,7 +218,9 @@ const App = () => {
     const customPronunciationsRef = useRef(customPronunciations);
     const speechCustomizationRef = useRef(speechCustomization);
     const synth = window.speechSynthesis;
+    const ttsGenerationRef = useRef(0);
     const pageRefs = useRef({});
+    const pageRefCallbacks = useRef({});
     const viewportRef = useRef(null);
 
     const settingsRef = useRef(null);
@@ -536,16 +536,20 @@ const App = () => {
         if (waitingForPageRef.current === pageNum && isPlayingRef.current) {
             waitingForPageRef.current = null;
             // Check if AI Mode is enabled to route correctly
-            if (aiConfig.enabled) {
+            if (aiConfigRef.current.enabled) {
                 const tokens = pageTokensMap.current.get(pageNum);
                 if (tokens && tokens.length > 0) {
-                    playNextSentenceAI(pageNum, tokens[0].id);
+                    playNextSentenceAIRef.current(pageNum, tokens[0].id);
                 }
             } else {
-                scheduleNextBatch(pageNum, []);
+                scheduleNextBatchRef.current(pageNum, []);
             }
         }
-    }, [aiConfig.enabled]); // Added dependency
+    }, []); // Removed dependency since we use refs
+
+    // --- References for functions ---
+    const playNextSentenceAIRef = useRef(null);
+    const scheduleNextBatchRef = useRef(null);
 
     // --- Smart Jump Logic ---
     const performJump = async (pageNumber, doc = pdf) => {
@@ -633,10 +637,11 @@ const App = () => {
             setFitMode('custom');
             setActiveTokenId(null);
             setIsPlaying(false);
+            setIsVoiceLoading(false);
             pageTokensMap.current.clear();
             waitingForPageRef.current = null;
-            setDebugImages([]);
             console.log(`[TTS DEBUG] cancel called from loadFile`);
+            ttsGenerationRef.current += 1;
             synth.cancel();
 
             // Scroll to saved page (delayed to allow render)
@@ -685,11 +690,12 @@ const App = () => {
                     setSkipZones(meta.skipZones || []);
                     setFitMode('custom');
                     setActiveTokenId(null);
+                    setIsVoiceLoading(false);
                     setIsPlaying(false);
                     pageTokensMap.current.clear();
                     waitingForPageRef.current = null;
-                    setDebugImages([]);
                     console.log(`[TTS DEBUG] cancel called from loadMetadataOnly`);
+                    ttsGenerationRef.current += 1;
                     synth.cancel();
                     setTimeout(() => performJump(meta.lastPage || 1, pdfDoc), 300);
                 } finally {
@@ -812,8 +818,15 @@ const App = () => {
         }
     };
 
-    // Note: Updated to store the Component Ref, not just the DIV
-    const registerPageRef = (num, ref) => { pageRefs.current[num] = ref; };
+    const registerPageRef = useCallback((num, ref) => { pageRefs.current[num] = ref; }, []);
+    
+    const getPageRefCallback = useCallback((pageNum) => {
+        if (!pageRefCallbacks.current[pageNum]) {
+            pageRefCallbacks.current[pageNum] = (r) => registerPageRef(pageNum, r);
+        }
+        return pageRefCallbacks.current[pageNum];
+    }, [registerPageRef]);
+
     const notifyPageVisible = useCallback((pageNum) => { setActivePage(pageNum); }, []);
 
     const handleJumpKey = (e) => {
@@ -832,6 +845,7 @@ const App = () => {
         // of the canceled utterance doesn't stop playback.
         isJumpingRef.current = true;
         console.log(`[TTS DEBUG] cancel called from handleTokenClick`);
+        ttsGenerationRef.current += 1;
         synth.cancel();
         setIsPlaying(true);
         isPlayingRef.current = true;
@@ -839,7 +853,7 @@ const App = () => {
 
         // Determine Start logic
         if (aiConfigRef.current.enabled) {
-            playNextSentenceAI(pageNum, clickedTokenId);
+            playNextSentenceAIRef.current(pageNum, clickedTokenId);
         } else {
             let startIndex = 0;
             if (clickedTokenId) {
@@ -847,12 +861,12 @@ const App = () => {
                 if (startIndex === -1) startIndex = 0;
             }
             const tokens = pageTokens.slice(startIndex);
-            scheduleNextBatch(pageNum, tokens, true);
+            scheduleNextBatchRef.current(pageNum, tokens, true);
         }
 
         // Reset the jump flag after a short delay (enough for async cancel events to fire)
         setTimeout(() => { isJumpingRef.current = false; }, 50);
-    }, [voices, selectedVoiceURI, rate, aiConfig.enabled]);
+    }, [voices, selectedVoiceURI, rate]);
 
     // --- Smart Scrolling Logic (Safe Zone) ---
     const handleSmartScroll = (pageNum, tokenId) => {
@@ -957,6 +971,7 @@ const App = () => {
                 }
             } else {
                 console.log(`[TTS DEBUG] playNextSentenceAI - Reached end of document. Stopping playback.`);
+                setIsVoiceLoading(false);
                 setIsPlaying(false);
             }
             return;
@@ -1031,15 +1046,18 @@ const App = () => {
 
         const vSettings = getVoiceSettings(selectedVoiceURI);
         const utter = new SpeechSynthesisUtterance(textToSpeak);
+        utter.generation = ttsGenerationRef.current;
         utter.rate = calculateActualRate(rateRef.current, vSettings.sensitivity);
         const targetVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
         if (targetVoice) { utter.voice = targetVoice; utter.lang = targetVoice.lang; }
 
-        utter.onstart = () => {
+        utter.onstart = (event) => {
+            if (event.target.generation !== ttsGenerationRef.current) return;
             console.log(`[TTS DEBUG] playNextSentenceAI - utterance start`);
         };
 
-        utter.onend = () => {
+        utter.onend = (event) => {
+            if (event.target.generation !== ttsGenerationRef.current) return;
             console.log(`[TTS DEBUG] playNextSentenceAI - utterance end. isJumping: ${isJumpingRef.current}, isPlaying: ${isPlayingRef.current}`);
             if (isJumpingRef.current) return;
             if (isPlayingRef.current) {
@@ -1052,6 +1070,7 @@ const App = () => {
         };
 
         utter.onerror = (e) => {
+            if (e.target.generation !== ttsGenerationRef.current) return;
             console.log(`[TTS DEBUG] playNextSentenceAI - utterance error: ${e.error}. isJumping: ${isJumpingRef.current}`);
             if (isJumpingRef.current) return;
             if (e.error !== 'interrupted' && e.error !== 'canceled') {
@@ -1222,12 +1241,14 @@ const App = () => {
                 return scheduleNextBatch(nextBatchPageNum, nextLeftovers, false, allowWait);
             } else {
                 console.log(`[TTS DEBUG] scheduleNextBatch - script is empty and end of document reached, stopping playback.`);
+                setIsVoiceLoading(false);
                 setIsPlaying(false);
                 return false;
             }
         }
 
         const utter = new SpeechSynthesisUtterance(script);
+        utter.generation = ttsGenerationRef.current;
         utter.rate = calculateActualRate(rateRef.current, vSettings.sensitivity);
         const targetVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
         if (targetVoice) { utter.voice = targetVoice; utter.lang = targetVoice.lang; }
@@ -1242,8 +1263,10 @@ const App = () => {
         console.log(`[TTS DEBUG] scheduleNextBatch - Created utterance. nextBatchInfo:`, utter.nextBatchInfo);
 
         utter.onboundary = (event) => {
+            if (event.target.generation !== ttsGenerationRef.current) return;
             if (!isPlayingRef.current) { 
                 console.log(`[TTS DEBUG] utterance.onboundary - Cancelled synth because not playing.`);
+                ttsGenerationRef.current += 1;
                 synth.cancel(); 
                 return; 
             }
@@ -1270,7 +1293,9 @@ const App = () => {
         };
 
         utter.onstart = (event) => {
+            if (event.target.generation !== ttsGenerationRef.current) return;
             console.log(`[TTS DEBUG] utterance.onstart - Started utterance.`);
+            setIsVoiceLoading(false);
             if (!isPlayingRef.current) return;
 
             // If word mode is not supported, we must set active token here for the whole sentence highlight
@@ -1303,10 +1328,13 @@ const App = () => {
         };
 
         utter.onend = (event) => {
+            if (event.target.generation !== ttsGenerationRef.current) return;
             console.log(`[TTS DEBUG] utterance.onend - Ended utterance. isJumping: ${isJumpingRef.current}`);
             // If we are currently jumping (manual click), ignore the 'end' event 
             // from the canceled utterance so we don't stop playback.
             if (isJumpingRef.current) return;
+            
+            setIsVoiceLoading(false);
 
             if (!isPlayingRef.current) {
                 console.log('[TTS DEBUG] utterance.onend - isPlayingRef.current is FALSE, returning early.');
@@ -1332,10 +1360,13 @@ const App = () => {
         };
 
         utter.onerror = (event) => {
+            if (event.target.generation !== ttsGenerationRef.current) return;
             console.log(`[TTS DEBUG] utterance.onerror - Error: ${event.error}. isJumping: ${isJumpingRef.current}`);
             // Ignore errors caused by manual cancellation or during a jump
             if (isJumpingRef.current) return;
             if (event.error === 'interrupted' || event.error === 'canceled') return;
+
+            setIsVoiceLoading(false);
 
             if (isPlayingRef.current) {
                 console.log(`[TTS DEBUG] utterance.onerror - Stopping playback due to error.`);
@@ -1344,6 +1375,9 @@ const App = () => {
         };
 
         console.log(`[TTS DEBUG] scheduleNextBatch - calling synth.speak()`);
+        if (!synth.speaking) {
+            setIsVoiceLoading(true);
+        }
         synth.speak(utter);
         return true;
     };
@@ -1352,9 +1386,11 @@ const App = () => {
         if (isMarkingModeRef.current) return;
         if (isPlaying) {
             console.log(`[TTS DEBUG] togglePlay - Stopping playback. cancelling synth.`);
+            setIsVoiceLoading(false);
             setIsPlaying(false);
             isPlayingRef.current = false;
             waitingForPageRef.current = null;
+            ttsGenerationRef.current += 1;
             synth.cancel();
         } else {
             console.log(`[TTS DEBUG] togglePlay - Starting playback. activePage: ${activePage}, activeTokenId: ${activeTokenId}`);
@@ -1383,6 +1419,11 @@ const App = () => {
     };
 
     // --- Keyboard Navigation Logic (Word/Sentence aware) ---
+    useEffect(() => {
+        playNextSentenceAIRef.current = playNextSentenceAI;
+        scheduleNextBatchRef.current = scheduleNextBatch;
+    });
+
     const handleSmartNavigation = useCallback((direction) => {
         // direction: -1 (prev) or 1 (next)
         const currentPageInfo = activePageRef.current !== null ? activePageRef.current : activePage;
@@ -1594,12 +1635,13 @@ const App = () => {
                         return next;
                     });
                     break;
-                case 'i': // AI Fix Mode
+                case 'i': { // AI Fix Mode
                     e.preventDefault();
                     const nextEnabled = !aiConfigRef.current.enabled;
                     setAiConfig({ ...aiConfigRef.current, enabled: nextEnabled });
                     if (nextEnabled) setReadingMode('sentence');
                     break;
+                }
                 case 'h': // Help
                     e.preventDefault();
                     setShowHelp(prev => !prev);
@@ -1611,18 +1653,7 @@ const App = () => {
 
         window.addEventListener('keydown', handleGlobalKeyDown);
         return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-    }, [activePage, activeTokenId, readingMode, isPlaying, handleSmartNavigation, performJump, toggleFitMode]);
-
-    const handleDebugExtract = async () => {
-        const pageRef = pageRefs.current[activePage];
-        if (pageRef && pageRef.generateDebugImages) {
-            const images = await pageRef.generateDebugImages();
-            setDebugImages(images);
-            setShowSettings(false);
-        } else {
-            alert("Debug: Page not ready or loaded.");
-        }
-    };
+    }, [activePage, activeTokenId, readingMode, isPlaying, handleSmartNavigation, performJump, toggleFitMode, handleTokenClick, numPages, selectedVoiceURI, togglePlay, voices]);
 
     const handleResetCost = () => {
         if (confirm("Reset accumulated cost tracker to $0.00?")) {
@@ -1983,12 +2014,12 @@ const App = () => {
                                 {Array.from(new Array(numPages), (_, i) => i + 1).map(pageNum => (
                                     <PDFPage
                                         key={pageNum}
-                                        ref={(r) => registerPageRef(pageNum, r)}
+                                        ref={getPageRefCallback(pageNum)}
                                         pdfDoc={pdf}
                                         pageNum={pageNum}
                                         scale={scale}
                                         rotation={rotation}
-                                        activeTokenId={activeTokenId}
+                                        activeTokenId={activePage === pageNum ? activeTokenId : null}
                                         readingMode={readingMode}
                                         onTokensParsed={handleTokenClick}
                                         notifyPageVisible={notifyPageVisible}
@@ -2005,24 +2036,6 @@ const App = () => {
                                     />
                                 ))}
                             </div>
-                            {debugImages.length > 0 && (
-                                <div className="debug-panel" style={{ padding: '20px', background: '#f5f5f5', borderTop: '1px solid #ccc' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
-                                        <h3>Debug Extraction Output ({debugImages.length})</h3>
-                                        <button className="icon-btn" onClick={() => setDebugImages([])}><Icons.Close /> Clear</button>
-                                    </div>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                                        {debugImages.map((item, idx) => (
-                                            <div key={idx} style={{ background: 'white', padding: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }}>
-                                                <div style={{ marginBottom: '5px', fontSize: '12px', color: '#555', fontFamily: 'monospace' }}>
-                                                    {item.text}
-                                                </div>
-                                                <img src={item.img} alt={`Sentence ${idx}`} style={{ maxWidth: '100%', border: '1px solid #ddd' }} />
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
                         </>
                     )}
                 </div>
@@ -2038,6 +2051,13 @@ const App = () => {
                 {aiWarning && (
                     <div style={{ position: 'absolute', bottom: '90px', left: '50%', transform: 'translateX(-50%)', background: 'rgba(50, 50, 50, 0.95)', color: '#e4e4e7', padding: '6px 14px', borderRadius: '20px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px', boxShadow: '0 4px 10px rgba(0,0,0,0.2)', zIndex: 2000 }}>
                         <span style={{ fontSize: '14px' }}>⚠️</span> {aiWarning}
+                    </div>
+                )}
+
+                {/* VOICE LOADING INDICATOR */}
+                {isVoiceLoading && (
+                    <div style={{ position: 'absolute', bottom: '90px', left: '50%', transform: 'translateX(-50%)', background: '#333', color: 'white', padding: '8px 16px', borderRadius: '20px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 10px rgba(0,0,0,0.3)', zIndex: 2000 }}>
+                        <div className="spinner" style={{ width: 14, height: 14, borderWidth: 2, marginBottom: 0 }}></div> Loading Voice...
                     </div>
                 )}
 
@@ -2195,7 +2215,9 @@ const App = () => {
                                                         let displayName = lang;
                                                         try {
                                                             displayName = new Intl.DisplayNames(['en'], { type: 'language' }).of(lang);
-                                                        } catch(e) {}
+                                                        } catch (e) {
+                                                            // fallback to lang code
+                                                        }
                                                         return (
                                                         <option key={lang} value={lang}>
                                                             {displayName}
@@ -2471,7 +2493,9 @@ const App = () => {
                                                                         let displayName = lang;
                                                                         try {
                                                                             displayName = new Intl.DisplayNames(['en'], { type: 'language' }).of(lang);
-                                                                        } catch(e) {}
+                                                                        } catch (e) {
+                                                                            // fallback to lang code
+                                                                        }
                                                                         return (
                                                                         <option key={lang} value={lang}>
                                                                             {displayName}
