@@ -171,7 +171,7 @@ const App = () => {
     const [showCustomSpeech, setShowCustomSpeech] = useState(false);
 
     // Navigation
-    const [numPages, setNumPages] = useState(0);
+    const [numPages, setNumPages] = useState(-999);
     const [activePage, setActivePage] = useState(1);
     const [jumpInput, setJumpInput] = useState("1");
     const [isInputFocused, setIsInputFocused] = useState(false);
@@ -235,6 +235,7 @@ const App = () => {
     const waitingForPageRef = useRef(null);
     const activeTokenIdRef = useRef(null);
     const activePageRef = useRef(1);
+    const numPagesRef = useRef(numPages);
 
     // Visual
     const [isLoading, setIsLoading] = useState(false);
@@ -247,6 +248,7 @@ const App = () => {
     };
 
     useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+    useEffect(() => { numPagesRef.current = numPages; }, [numPages]);
     useEffect(() => { rateRef.current = rate; }, [rate]);
     useEffect(() => { autoScrollRef.current = autoScroll; }, [autoScroll]);
     useEffect(() => { customPronunciationsRef.current = customPronunciations; }, [customPronunciations]);
@@ -403,7 +405,12 @@ const App = () => {
                     validatedVoiceURI = selectedVoiceURI;
                 } else {
                     // Fallback to default
-                    const defaultVoice = available.find(v => v.default) || available[0];
+                    const browserLang = (navigator.language || 'en').split('-')[0];
+                    const defaultVoice = available.find(v => v.default && v.lang.startsWith(browserLang)) || 
+                                         available.find(v => v.lang.startsWith(browserLang)) || 
+                                         available.find(v => v.lang.startsWith('en')) || 
+                                         available.find(v => v.default) || 
+                                         available[0];
                     if (defaultVoice) {
                         currentLang = defaultVoice.lang.split('-')[0];
                         validatedVoiceURI = defaultVoice.voiceURI;
@@ -542,7 +549,7 @@ const App = () => {
 
     // --- Smart Jump Logic ---
     const performJump = async (pageNumber, doc = pdf) => {
-        if (!doc || pageNumber < 1 || pageNumber > (doc.numPages || numPages)) return;
+        if (!doc || pageNumber < 1 || pageNumber > (doc.numPages || numPagesRef.current)) return;
 
         // Optional: show loading if jumping far
         const isFarJump = Math.abs(pageNumber - activePage) > 5;
@@ -608,6 +615,7 @@ const App = () => {
             loadRecentFilesList();
 
             setPdf(pdfDoc);
+            console.log("[debug] PDF loaded, number of pages:", pdfDoc.numPages);
             setNumPages(pdfDoc.numPages);
 
             // Restore Settings or Default
@@ -628,6 +636,7 @@ const App = () => {
             pageTokensMap.current.clear();
             waitingForPageRef.current = null;
             setDebugImages([]);
+            console.log(`[TTS DEBUG] cancel called from loadFile`);
             synth.cancel();
 
             // Scroll to saved page (delayed to allow render)
@@ -680,6 +689,7 @@ const App = () => {
                     pageTokensMap.current.clear();
                     waitingForPageRef.current = null;
                     setDebugImages([]);
+                    console.log(`[TTS DEBUG] cancel called from loadMetadataOnly`);
                     synth.cancel();
                     setTimeout(() => performJump(meta.lastPage || 1, pdfDoc), 300);
                 } finally {
@@ -809,7 +819,7 @@ const App = () => {
     const handleJumpKey = (e) => {
         if (e.key === 'Enter') {
             const page = parseInt(jumpInput);
-            if (page >= 1 && page <= numPages) {
+            if (page >= 1 && page <= numPagesRef.current) {
                 // USE NEW JUMP LOGIC HERE
                 performJump(page);
                 e.target.blur();
@@ -821,6 +831,7 @@ const App = () => {
         // Flag that we are intentionally jumping so the 'onend'/'onerror' 
         // of the canceled utterance doesn't stop playback.
         isJumpingRef.current = true;
+        console.log(`[TTS DEBUG] cancel called from handleTokenClick`);
         synth.cancel();
         setIsPlaying(true);
         isPlayingRef.current = true;
@@ -923,31 +934,39 @@ const App = () => {
 
     // --- NEW: AI-Enhanced Playback Loop ---
     const playNextSentenceAI = async (pageNum, tokenId) => {
+        console.log(`[TTS DEBUG] playNextSentenceAI called. pageNum: ${pageNum}, tokenId: ${tokenId}, isPlaying: ${isPlayingRef.current}`);
         if (!isPlayingRef.current) return;
 
         const info = getNextSentenceInfo(pageNum, tokenId);
 
         // Handle Page Transitions
         if (info.nextPage && !info.tokens) {
-            if (info.pageNum < numPages) {
+            console.log(`[TTS DEBUG] playNextSentenceAI - Page transition needed. targetPage: ${info.pageNum < numPagesRef.current ? info.pageNum + 1 : 'End of Document'}`);
+            if (info.pageNum < numPagesRef.current) {
                 const nextPage = info.pageNum + 1;
                 if (pageTokensMap.current.has(nextPage)) {
+                    console.log(`[TTS DEBUG] playNextSentenceAI - Next page tokens found, playing next page.`);
                     const nextTokens = pageTokensMap.current.get(nextPage);
                     playNextSentenceAI(nextPage, nextTokens[0]?.id);
                 } else {
+                    console.log(`[TTS DEBUG] playNextSentenceAI - Waiting for page ${nextPage} to load.`);
                     waitingForPageRef.current = nextPage;
                     if (pageRefs.current[nextPage]) {
                         pageRefs.current[nextPage].scrollIntoView({ behavior: 'smooth', block: 'start' });
                     }
                 }
             } else {
+                console.log(`[TTS DEBUG] playNextSentenceAI - Reached end of document. Stopping playback.`);
                 setIsPlaying(false);
             }
             return;
         }
 
         const sentenceTokens = info.tokens;
-        if (!sentenceTokens || sentenceTokens.length === 0) return;
+        if (!sentenceTokens || sentenceTokens.length === 0) {
+            console.log(`[TTS DEBUG] playNextSentenceAI - No sentence tokens found.`);
+            return;
+        }
 
         const firstTokenId = sentenceTokens[0].id;
         setActiveTokenId(firstTokenId);
@@ -998,7 +1017,10 @@ const App = () => {
 
         textToSpeak = applyCustomPronunciations(textToSpeak, customPronunciationsRef.current);
 
+        console.log(`[TTS DEBUG] playNextSentenceAI - Final textToSpeak: "${textToSpeak}"`);
+
         if (!textToSpeak.trim()) {
+            console.log(`[TTS DEBUG] playNextSentenceAI - Empty text to speak. Skipping to next.`);
             if (info.nextTokenId) {
                 playNextSentenceAI(info.pageNum, info.nextTokenId);
             } else {
@@ -1013,7 +1035,12 @@ const App = () => {
         const targetVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
         if (targetVoice) { utter.voice = targetVoice; utter.lang = targetVoice.lang; }
 
+        utter.onstart = () => {
+            console.log(`[TTS DEBUG] playNextSentenceAI - utterance start`);
+        };
+
         utter.onend = () => {
+            console.log(`[TTS DEBUG] playNextSentenceAI - utterance end. isJumping: ${isJumpingRef.current}, isPlaying: ${isPlayingRef.current}`);
             if (isJumpingRef.current) return;
             if (isPlayingRef.current) {
                 if (info.nextTokenId) {
@@ -1025,6 +1052,7 @@ const App = () => {
         };
 
         utter.onerror = (e) => {
+            console.log(`[TTS DEBUG] playNextSentenceAI - utterance error: ${e.error}. isJumping: ${isJumpingRef.current}`);
             if (isJumpingRef.current) return;
             if (e.error !== 'interrupted' && e.error !== 'canceled') {
                 console.error("Speech Error", e);
@@ -1032,20 +1060,34 @@ const App = () => {
             }
         };
 
+        console.log(`[TTS DEBUG] calling synth.speak() in playNextSentenceAI`);
         synth.speak(utter);
     };
 
     // --- TTS Engine (Standard Batch Mode) ---
 
     const scheduleNextBatch = (startPageNum, carryOverTokens, isFirstBatch = false, allowWait = true) => {
+        console.log(`[TTS DEBUG] scheduleNextBatch called. startPage: ${startPageNum}, isFirstBatch: ${isFirstBatch}, allowWait: ${allowWait}, isPlaying: ${isPlayingRef.current}`);
+        console.log('[TTS DEBUG] scheduleNextBatch - carryOverTokens:', carryOverTokens);
+        if (numPagesRef.current<=0) {
+            console.log(`[ERROR] scheduleNextBatch - numPages is 0 or less. Cannot schedule batch.`, numPagesRef.current);
+            return false;
+        }
+
         if (!isPlayingRef.current) return false;
+
+        const vSettings = getVoiceSettings(selectedVoiceURI);
+        const forceSentenceMode = !vSettings.supportWordMode;
 
         let pool = [...carryOverTokens];
 
         if (pool.length === 0) {
+            console.log(`[TTS DEBUG] scheduleNextBatch - No carry over tokens.`);
             const pageTokens = pageTokensMap.current.get(startPageNum);
             if (!pageTokens) {
+                console.log(`[TTS DEBUG] scheduleNextBatch - Tokens for page ${startPageNum} not found.`);
                 if (allowWait) {
+                    console.log(`[TTS DEBUG] scheduleNextBatch - Waiting for page ${startPageNum} to load.`);
                     waitingForPageRef.current = startPageNum;
                     // Scroll into view if waiting for page
                     if (pageRefs.current[startPageNum]) {
@@ -1055,21 +1097,39 @@ const App = () => {
                 return false;
             }
             pool = [...pageTokens];
+            console.log(`[TTS DEBUG] scheduleNextBatch - loaded ${pool.length} tokens from page ${startPageNum}.`);
         }
 
         const nextPageNum = startPageNum + 1;
         const nextPageTokens = pageTokensMap.current.get(nextPageNum);
         let hasNextPage = false;
 
-        if (nextPageTokens && nextPageTokens.length > 0) {
+        const hasNextPageTokens = pool.some(t => t.pageNum === nextPageNum);
+
+        if (!hasNextPageTokens && nextPageTokens && nextPageTokens.length > 0) {
             pool = [...pool, ...nextPageTokens];
+            hasNextPage = true;
+        } else if (hasNextPageTokens) {
             hasNextPage = true;
         }
 
         let endIndex = pool.length;
         let nextLeftovers = [];
 
-        if (hasNextPage) {
+        if (forceSentenceMode) {
+            // ONLY Take ONE sentence!
+            console.log(`[TTS DEBUG] scheduleNextBatch - forceSentenceMode is ON.`);
+            const sentences = groupTokensIntoSentences(pool);
+            if (sentences.length > 0) {
+                const firstSentence = sentences[0];
+                endIndex = firstSentence.length;
+                if (endIndex < pool.length) {
+                    nextLeftovers = pool.slice(endIndex);
+                    pool = pool.slice(0, endIndex);
+                }
+            }
+        } else if (hasNextPage) {
+            console.log(`[TTS DEBUG] scheduleNextBatch - hasNextPage is true.`);
             let safetyFound = false;
             for (let i = pool.length - 1; i > 0; i--) {
                 const txt = pool[i].spokenText.trim();
@@ -1148,16 +1208,25 @@ const App = () => {
             map.push({ start, end, token });
         });
 
+        console.log(`[TTS DEBUG] scheduleNextBatch - Final script generated. Length: ${script.length}. Empty? ${!script.trim()}`);
+
         if (!script.trim()) {
-            if (startPageNum < numPages) {
-                return scheduleNextBatch(nextPageNum, nextLeftovers, false, allowWait);
+            const nextBatchPageNum = nextLeftovers.length > 0 
+                ? nextLeftovers[0].pageNum 
+                : (hasNextPage ? nextPageNum + 1 : startPageNum + 1);
+
+            console.log('[TTS DEBUG] scheduleNextBatch - script is empty. nextBatchPageNum:', nextBatchPageNum, 'nextLeftovers:', nextLeftovers, 'hasNextPage:', hasNextPage);
+
+            if (nextBatchPageNum <= numPagesRef.current) {
+                console.log(`[TTS DEBUG] scheduleNextBatch - script is empty, moving to next page/leftovers: ${nextBatchPageNum}.`);
+                return scheduleNextBatch(nextBatchPageNum, nextLeftovers, false, allowWait);
             } else {
+                console.log(`[TTS DEBUG] scheduleNextBatch - script is empty and end of document reached, stopping playback.`);
                 setIsPlaying(false);
                 return false;
             }
         }
 
-        const vSettings = getVoiceSettings(selectedVoiceURI);
         const utter = new SpeechSynthesisUtterance(script);
         utter.rate = calculateActualRate(rateRef.current, vSettings.sensitivity);
         const targetVoice = voices.find(v => v.voiceURI === selectedVoiceURI);
@@ -1165,13 +1234,19 @@ const App = () => {
 
         utter.audioMap = map;
         utter.nextBatchInfo = {
-            pageNum: hasNextPage ? nextPageNum : startPageNum + 1,
+            pageNum: nextLeftovers.length > 0 ? nextLeftovers[0].pageNum : (hasNextPage ? nextPageNum + 1 : startPageNum + 1),
             leftovers: nextLeftovers
         };
         utter.hasQueuedNext = false;
+        
+        console.log(`[TTS DEBUG] scheduleNextBatch - Created utterance. nextBatchInfo:`, utter.nextBatchInfo);
 
         utter.onboundary = (event) => {
-            if (!isPlayingRef.current) { synth.cancel(); return; }
+            if (!isPlayingRef.current) { 
+                console.log(`[TTS DEBUG] utterance.onboundary - Cancelled synth because not playing.`);
+                synth.cancel(); 
+                return; 
+            }
 
             const currentMap = event.target.audioMap;
             if (!currentMap) return;
@@ -1195,42 +1270,80 @@ const App = () => {
         };
 
         utter.onstart = (event) => {
+            console.log(`[TTS DEBUG] utterance.onstart - Started utterance.`);
             if (!isPlayingRef.current) return;
-            const info = event.target.nextBatchInfo;
 
-            if (info && !event.target.hasQueuedNext && info.pageNum <= numPages) {
-                const queued = scheduleNextBatch(info.pageNum, info.leftovers, false, false);
-                if (queued) {
-                    event.target.hasQueuedNext = true;
+            // If word mode is not supported, we must set active token here for the whole sentence highlight
+            if (forceSentenceMode) {
+                const currentMap = event.target.audioMap;
+                if (currentMap && currentMap.length > 0) {
+                    const firstEntry = currentMap[0];
+                    const tokenId = firstEntry.token.id;
+                    const pageNum = firstEntry.token.pageNum;
+
+                    setActiveTokenId(tokenId);
+                    if (pageNum !== activePage) {
+                        setActivePage(pageNum);
+                    }
+                    handleSmartScroll(pageNum, tokenId);
+                }
+            }
+
+            if (!forceSentenceMode) {
+                const info = event.target.nextBatchInfo;
+
+                if (info && !event.target.hasQueuedNext && info.pageNum <= numPagesRef.current) {
+                    console.log(`[TTS DEBUG] utterance.onstart - queuing next batch.`);
+                    const queued = scheduleNextBatch(info.pageNum, info.leftovers, false, false);
+                    if (queued) {
+                        event.target.hasQueuedNext = true;
+                    }
                 }
             }
         };
 
         utter.onend = (event) => {
+            console.log(`[TTS DEBUG] utterance.onend - Ended utterance. isJumping: ${isJumpingRef.current}`);
             // If we are currently jumping (manual click), ignore the 'end' event 
             // from the canceled utterance so we don't stop playback.
             if (isJumpingRef.current) return;
 
-            if (!isPlayingRef.current) return;
+            if (!isPlayingRef.current) {
+                console.log('[TTS DEBUG] utterance.onend - isPlayingRef.current is FALSE, returning early.');
+                return;
+            }
             if (!event.target.hasQueuedNext) {
                 const info = event.target.nextBatchInfo;
-                if (info && info.pageNum <= numPages) {
+                console.log('[TTS DEBUG] utterance.onend - nextBatchInfo:', info);
+                if (info && info.pageNum <= numPagesRef.current) {
+                    console.log(`[TTS DEBUG] utterance.onend - scheduling next batch from onend. target page: ${info.pageNum}, leftovers:`, info.leftovers);
                     scheduleNextBatch(info.pageNum, info.leftovers, false, true);
                 } else {
+                    if (info) {
+                        console.log(`[TTS DEBUG] utterance.onend - nextBatchInfo pageNum ${info.pageNum} exceeds numPages ${numPagesRef.current}. Stopping playback.`);
+                    }
+                    console.log(`[TTS DEBUG] utterance.onend - Reached end of document or nextBatchInfo missing/invalid. Calling setIsPlaying(false).`);
                     setIsPlaying(false);
                     setActiveTokenId(null);
                 }
+            } else {
+                console.log('[TTS DEBUG] utterance.onend - hasQueuedNext is TRUE, not scheduling next batch.');
             }
         };
 
         utter.onerror = (event) => {
+            console.log(`[TTS DEBUG] utterance.onerror - Error: ${event.error}. isJumping: ${isJumpingRef.current}`);
             // Ignore errors caused by manual cancellation or during a jump
             if (isJumpingRef.current) return;
             if (event.error === 'interrupted' || event.error === 'canceled') return;
 
-            if (isPlayingRef.current) setIsPlaying(false);
+            if (isPlayingRef.current) {
+                console.log(`[TTS DEBUG] utterance.onerror - Stopping playback due to error.`);
+                setIsPlaying(false);
+            }
         };
 
+        console.log(`[TTS DEBUG] scheduleNextBatch - calling synth.speak()`);
         synth.speak(utter);
         return true;
     };
@@ -1238,11 +1351,13 @@ const App = () => {
     const togglePlay = () => {
         if (isMarkingModeRef.current) return;
         if (isPlaying) {
+            console.log(`[TTS DEBUG] togglePlay - Stopping playback. cancelling synth.`);
             setIsPlaying(false);
             isPlayingRef.current = false;
             waitingForPageRef.current = null;
             synth.cancel();
         } else {
+            console.log(`[TTS DEBUG] togglePlay - Starting playback. activePage: ${activePage}, activeTokenId: ${activeTokenId}`);
             setIsPlaying(true);
             isPlayingRef.current = true;
             const tokens = pageTokensMap.current.get(activePage) || [];
@@ -1340,7 +1455,7 @@ const App = () => {
             }
         } else if (newIndex >= tokens.length) {
             // Go to next page
-            if (currentPageInfo < numPages) {
+            if (currentPageInfo < numPagesRef.current) {
                 const nextPage = currentPageInfo + 1;
                 activePageRef.current = nextPage;
                 const nextTokens = pageTokensMap.current.get(nextPage);
@@ -1357,7 +1472,7 @@ const App = () => {
             handleTokenClick(tokens, tokens[newIndex].id, currentPageInfo);
         }
 
-    }, [activePage, activeTokenId, readingMode, numPages, handleTokenClick, performJump]);
+    }, [activePage, activeTokenId, readingMode, handleTokenClick, performJump]);
 
     // --- Keyboard Shortcuts ---
     useEffect(() => {
@@ -1496,7 +1611,7 @@ const App = () => {
 
         window.addEventListener('keydown', handleGlobalKeyDown);
         return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-    }, [activePage, activeTokenId, readingMode, isPlaying, numPages, handleSmartNavigation, performJump, toggleFitMode]);
+    }, [activePage, activeTokenId, readingMode, isPlaying, handleSmartNavigation, performJump, toggleFitMode]);
 
     const handleDebugExtract = async () => {
         const pageRef = pageRefs.current[activePage];
@@ -1969,7 +2084,7 @@ const App = () => {
 
                                 <div className="divider-vertical small"></div>
 
-                                <button className="text-btn" onClick={toggleFitMode} title="Toggle Fit (F)">
+                                <button className="text-btn" onClick={toggleFitMode} title="Toggle Fit (Z)">
                                     {fitMode === 'width' ? 'Fit W' : fitMode === 'height' ? 'Fit H' : 'Fit'}
                                 </button>
 
@@ -2076,11 +2191,16 @@ const App = () => {
                                                     }}
                                                     className="voice-select"
                                                 >
-                                                    {Array.from(new Set(voices.map(v => v.lang.split('-')[0]))).sort().map(lang => (
+                                                    {Array.from(new Set(voices.map(v => v.lang ? v.lang.split('-')[0] : ''))).filter(Boolean).sort().map(lang => {
+                                                        let displayName = lang;
+                                                        try {
+                                                            displayName = new Intl.DisplayNames(['en'], { type: 'language' }).of(lang);
+                                                        } catch(e) {}
+                                                        return (
                                                         <option key={lang} value={lang}>
-                                                            {new Intl.DisplayNames(['en'], { type: 'language' }).of(lang)}
+                                                            {displayName}
                                                         </option>
-                                                    ))}
+                                                    )})}
                                                 </select>
                                             </div>
 
@@ -2138,7 +2258,7 @@ const App = () => {
 
                                             <div className="setting-item">
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-                                                    <label>Focus Mode (Auto-Hide) (Z)</label>
+                                                    <label>Focus Mode (auto-hide menu) (F)</label>
                                                     <input
                                                         type="checkbox"
                                                         checked={autoHide}
@@ -2347,11 +2467,16 @@ const App = () => {
                                                                     className="voice-select"
                                                                     style={{ width: '100%', padding: '6px' }}
                                                                 >
-                                                                    {Array.from(new Set(voices.filter(v => v.localService).map(v => v.lang.split('-')[0]))).sort().map(lang => (
+                                                                    {Array.from(new Set(voices.filter(v => v.localService).map(v => v.lang ? v.lang.split('-')[0] : ''))).filter(Boolean).sort().map(lang => {
+                                                                        let displayName = lang;
+                                                                        try {
+                                                                            displayName = new Intl.DisplayNames(['en'], { type: 'language' }).of(lang);
+                                                                        } catch(e) {}
+                                                                        return (
                                                                         <option key={lang} value={lang}>
-                                                                            {new Intl.DisplayNames(['en'], { type: 'language' }).of(lang)}
+                                                                            {displayName}
                                                                         </option>
-                                                                    ))}
+                                                                    )})}
                                                                 </select>
 
                                                                 <select
