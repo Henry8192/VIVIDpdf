@@ -9,14 +9,14 @@ import {
 } from './parsing';
 import { buildPronunciationRegex } from './speechUtils';
 
-const PDFPage = forwardRef(({ 
-  pdfDoc, 
-  pageNum, 
-  scale, 
-  rotation, 
-  onTokensParsed, 
-  activeTokenId, 
-  readingMode, 
+const PDFPage = forwardRef(({
+  pdfDoc,
+  pageNum,
+  scale,
+  rotation,
+  onTokensParsed,
+  activeTokenId,
+  readingMode,
   notifyPageVisible,
   registerPageTokens,
   isMarkingMode,
@@ -27,11 +27,13 @@ const PDFPage = forwardRef(({
   highlightColor = '#ffeb3b',
   highlightOpacity = 0.4,
   speechCustomization = {},
-  customPronunciations = []
+  customPronunciations = [],
+  onHoverCrossPage = null,
 }, ref) => {
   const [isVisible, setIsVisible] = useState(false);
-  const [pageDimensions, setPageDimensions] = useState(null); 
+  const [pageDimensions, setPageDimensions] = useState(null);
   const [hoveredTokenId, setHoveredTokenId] = useState(null);
+  const [continuationHoverActive, setContinuationHoverActive] = useState(false);
   
   // New state for loading animation
   const [isRendering, setIsRendering] = useState(false);
@@ -43,11 +45,30 @@ const PDFPage = forwardRef(({
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
   const textLayerRef = useRef(null);
+  const highlightCanvasRef = useRef(null);
+  const hoverCanvasRef = useRef(null);
   const pageTokensRef = useRef([]);
   const allTokensRef = useRef([]); // NEW: Store all tokens before filtering
   const spanMapRef = useRef(new Map());
   const sentenceGroupsRef = useRef([]);
   const blackoutOverlaysRef = useRef([]);
+
+  // Helper: draw a rounded rectangle path on a canvas context
+  const drawRoundedRect = (ctx, rect, radius) => {
+    const { left, top, width, height } = rect;
+    const r = Math.min(radius, width / 2, height / 2);
+    ctx.beginPath();
+    ctx.moveTo(left + r, top);
+    ctx.lineTo(left + width - r, top);
+    ctx.quadraticCurveTo(left + width, top, left + width, top + r);
+    ctx.lineTo(left + width, top + height - r);
+    ctx.quadraticCurveTo(left + width, top + height, left + width - r, top + height);
+    ctx.lineTo(left + r, top + height);
+    ctx.quadraticCurveTo(left, top + height, left, top + height - r);
+    ctx.lineTo(left, top + r);
+    ctx.quadraticCurveTo(left, top, left + r, top);
+    ctx.closePath();
+  };
 
   // --- Scroll Visibility Observer ---
   useEffect(() => {
@@ -227,7 +248,10 @@ const PDFPage = forwardRef(({
     generateDebugImages: async () => {
         // Logic moved to textUtils.js
         return generateDebugImagesFromCanvas(canvasRef.current, pageTokensRef.current, pageDimensions);
-    }
+    },
+    setContinuationHover: (active) => {
+        setContinuationHoverActive(active);
+    },
   }));
 
   // --- NEW: Apply Skip Zones Logic ---
@@ -342,11 +366,29 @@ const PDFPage = forwardRef(({
         }
     });
 
+    // Fix reading order: some PDFs store footer/header content in the wrong position
+    // in the PDF content stream (e.g. footer before body). Partition into header/body/footer
+    // regions by visual position and reorder to header→body→footer while preserving the
+    // original intra-region order (important for correct multi-column reading).
+    if (validTokens.length > 0 && pageDimensions) {
+      const HEADER_ZONE = pageDimensions.height * 0.10; // top 10% of page
+      const FOOTER_ZONE = pageDimensions.height * 0.90; // bottom 10% of page
+      const headerTokens = validTokens.filter(t => t.bounds.bottom <= HEADER_ZONE);
+      const footerTokens = validTokens.filter(t => t.bounds.top >= FOOTER_ZONE);
+      const bodyTokens = validTokens.filter(
+        t => t.bounds.bottom > HEADER_ZONE && t.bounds.top < FOOTER_ZONE
+      );
+      if (headerTokens.length > 0 || footerTokens.length > 0) {
+        validTokens.length = 0;
+        validTokens.push(...headerTokens, ...bodyTokens, ...footerTokens);
+      }
+    }
+
     pageTokensRef.current = validTokens;
-    if (readingMode === 'sentence') { 
+    if (readingMode === 'sentence') {
         sentenceGroupsRef.current = groupTokensIntoSentences(validTokens);
     } else {
-        sentenceGroupsRef.current = groupTokensIntoSentences(validTokens); 
+        sentenceGroupsRef.current = groupTokensIntoSentences(validTokens);
     }
     registerPageTokens(pageNum, validTokens);
 
@@ -692,6 +734,24 @@ const PDFPage = forwardRef(({
     }
   };
 
+  // Unified hover change: updates state and notifies parent for cross-page continuation
+  const handleHoverChange = useCallback((newTokenId) => {
+    setHoveredTokenId(newTokenId);
+    if (!onHoverCrossPage) return;
+    if (newTokenId) {
+      const sentence = getSentenceTokens(newTokenId);
+      if (sentence.length > 0) {
+        const lastToken = sentence[sentence.length - 1];
+        const endsTerminal = /[.!?；。？！]["']?$/.test(lastToken.text.trim());
+        onHoverCrossPage(pageNum + 1, !endsTerminal);
+      } else {
+        onHoverCrossPage(pageNum + 1, false);
+      }
+    } else {
+      onHoverCrossPage(pageNum + 1, false);
+    }
+  }, [onHoverCrossPage, pageNum, getSentenceTokens]);
+
   const handleMouseMove = (e) => {
     if (isMarkingMode) {
         handleMouseMoveDrawing(e);
@@ -699,9 +759,9 @@ const PDFPage = forwardRef(({
     }
     const hoveredToken = getTokenFromEvent(e);
     if (hoveredToken) {
-        if (hoveredToken.id !== hoveredTokenId) setHoveredTokenId(hoveredToken.id);
+        if (hoveredToken.id !== hoveredTokenId) handleHoverChange(hoveredToken.id);
     } else {
-        if (hoveredTokenId !== null) setHoveredTokenId(null);
+        if (hoveredTokenId !== null) handleHoverChange(null);
     }
   };
 
@@ -867,9 +927,53 @@ const PDFPage = forwardRef(({
   }, [activeTokenId, getHighlightRects]);
 
   const hoverRects = useMemo(() => {
+      if (continuationHoverActive && sentenceGroupsRef.current.length > 0) {
+          const firstToken = sentenceGroupsRef.current[0]?.[0];
+          if (firstToken) return getHighlightRects(firstToken.id);
+      }
       if (!hoveredTokenId) return [];
       return getHighlightRects(hoveredTokenId);
-  }, [hoveredTokenId, getHighlightRects]);
+  }, [hoveredTokenId, continuationHoverActive, getHighlightRects]);
+
+  // --- Canvas-based Highlight Rendering ---
+  // Drawing all rects as solid fill on a canvas, then using CSS opacity on the canvas
+  // element prevents the darkening artifact that occurs when semi-transparent divs overlap.
+
+  useEffect(() => {
+    const canvas = highlightCanvasRef.current;
+    if (!canvas || !pageDimensions) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(pageDimensions.width * dpr);
+    canvas.height = Math.round(pageDimensions.height * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, pageDimensions.width, pageDimensions.height);
+    if (highlightEnabled && activeRects.length > 0) {
+      ctx.fillStyle = highlightColor;
+      activeRects.forEach(rect => {
+        drawRoundedRect(ctx, rect, 4);
+        ctx.fill();
+      });
+    }
+  }, [activeRects, highlightEnabled, highlightColor, pageDimensions]);
+
+  useEffect(() => {
+    const canvas = hoverCanvasRef.current;
+    if (!canvas || !pageDimensions) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(pageDimensions.width * dpr);
+    canvas.height = Math.round(pageDimensions.height * dpr);
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, pageDimensions.width, pageDimensions.height);
+    if (hoverRects.length > 0) {
+      ctx.fillStyle = highlightColor;
+      hoverRects.forEach(rect => {
+        drawRoundedRect(ctx, rect, 4);
+        ctx.fill();
+      });
+    }
+  }, [hoverRects, highlightColor, pageDimensions]);
 
   return (
     <div 
@@ -909,48 +1013,43 @@ const PDFPage = forwardRef(({
                 ref={textLayerRef} 
                 className="textLayer" 
                 onClick={handlePageClick}
-                onMouseLeave={() => setHoveredTokenId(null)}
+                onMouseLeave={() => handleHoverChange(null)}
                 style={{ pointerEvents: isMarkingMode ? 'none' : 'auto' }}
             />
             
-            {/* ACTIVE HIGHLIGHT */}
-            {activeRects.map((style, i) => (
-                !isMarkingMode && highlightEnabled && (
-                    <div 
-                        key={`active-${i}`} 
-                        className="highlight-box" 
-                        style={{
-                            ...style, 
-                            backgroundColor: highlightColor,
-                            opacity: highlightOpacity,
-                            // Soft edge style
-                            border: 'none',
-                            borderRadius: '4px',
-                            boxShadow: `0 0 6px ${highlightColor}`
-                        }} 
-                    />
-                )
-            ))}
-            
-            {/* HOVER HIGHLIGHT */}
-            {hoverRects.map((style, i) => (
-                !isMarkingMode && (
-                    <div 
-                        key={`hover-${i}`} 
-                        className="hover-box" 
-                        style={{
-                            ...style,
-                            // Derived from active color settings
-                            backgroundColor: highlightColor, 
-                            opacity: 0.25, 
-                            // Soft edge style
-                            border: 'none',
-                            borderRadius: '4px',
-                            boxShadow: `0 0 6px ${highlightColor}`
-                        }} 
-                    />
-                )
-            ))}
+            {/* ACTIVE HIGHLIGHT — canvas-based to prevent overlap darkening */}
+            {!isMarkingMode && (
+                <canvas
+                    ref={highlightCanvasRef}
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: pageDimensions ? pageDimensions.width : '100%',
+                        height: pageDimensions ? pageDimensions.height : '100%',
+                        pointerEvents: 'none',
+                        zIndex: 2,
+                        opacity: highlightEnabled ? highlightOpacity : 0,
+                    }}
+                />
+            )}
+
+            {/* HOVER HIGHLIGHT — canvas-based to prevent overlap darkening */}
+            {!isMarkingMode && (
+                <canvas
+                    ref={hoverCanvasRef}
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: pageDimensions ? pageDimensions.width : '100%',
+                        height: pageDimensions ? pageDimensions.height : '100%',
+                        pointerEvents: 'none',
+                        zIndex: 2,
+                        opacity: 0.25,
+                    }}
+                />
+            )}
 
             {pageDimensions && skipZones.map(zone => (
                 <div 

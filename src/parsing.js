@@ -83,8 +83,9 @@ export const groupTokensIntoSentences = (tokens) => {
     const currentText = t.spokenText.trim();
     const nextText = nextT.spokenText.trim();
 
-    const hasPunctuation = /[.!?]["']?$/.test(currentText);
-    const endsWithContinuation = /[,;—-]$/.test(currentText); // Removed colon so math blocks after introductory text break properly
+    const hasPunctuation = /[.!?；。？！]["']?$/.test(currentText);
+    const endsWithColon = /[:]$/.test(currentText);
+    const endsWithContinuation = /[,—-]$/.test(currentText); // Removed colon and semicolon; semicolons/Chinese stops now trigger sentence breaks
     // Allow punctuation to break only if it's not immediately followed by math logic,
     // though usually math won't follow terminal punctuation without a newline.
     const nextStartsCapital = /^[A-Z]/.test(nextText); // Remove numbers, so we don't snap on inline equations
@@ -119,6 +120,19 @@ export const groupTokensIntoSentences = (tokens) => {
         // 4. Strong structural break: Massively separated
         if (isMassiveGap) {
             activeTriggers.push('Massive Gap');
+        }
+
+        // 5. Colon before a newline — list/equation intro, break at the colon
+        if (endsWithColon) {
+            activeTriggers.push('Colon + Newline');
+        }
+
+        // 6. Fallback for scanned PDFs with missing terminal punctuation:
+        //    if the next line starts with a capital letter and the current token
+        //    doesn't end with a continuation character, assume a new sentence.
+        //    This avoids merging entire paragraphs when periods are absent from OCR output.
+        if (nextStartsCapital && !endsWithContinuation && !hasPunctuation && !endsWithColon) {
+            activeTriggers.push('Capital Start (OCR fallback)');
         }
     }
 

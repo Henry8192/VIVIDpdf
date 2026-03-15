@@ -873,6 +873,12 @@ const App = () => {
 
     const notifyPageVisible = useCallback((pageNum) => { setActivePage(pageNum); }, []);
 
+    // When a page's hovered sentence has no terminal punctuation, highlight the
+    // first sentence on the next page as continuation (cross-page sentence spanning).
+    const handleHoverCrossPage = useCallback((targetPageNum, active) => {
+        pageRefs.current[targetPageNum]?.setContinuationHover(active);
+    }, []);
+
     const handleJumpKey = (e) => {
         if (e.key === 'Enter') {
             const page = parseInt(jumpInput);
@@ -2277,6 +2283,7 @@ const App = () => {
                                         highlightOpacity={highlightOpacity}
                                         speechCustomization={speechCustomization}
                                         customPronunciations={customPronunciations}
+                                        onHoverCrossPage={handleHoverCrossPage}
                                     />
                                 ))}
                             </div>
